@@ -1,0 +1,25 @@
+[project]
+name = "vcell"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["F722", "E402", "E501"]
+
+[tool.uv]
+package = true
+
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "ruff>=0.12.4",
+]

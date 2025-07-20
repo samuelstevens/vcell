@@ -1,0 +1,15 @@
+1. Welcome
+
+vcell is a team project.
+
+## 2. TL;DR
+
+Install [uv](https://docs.astral.sh/uv/).
+Clone this repository, then from the root directory:
+
+```sh
+uv run python  # TODO
+```
+
+You also need [yek](https://github.com/bodo-run/yek) for generating docs.
+
