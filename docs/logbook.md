@@ -28,7 +28,24 @@ Long-term success: models that replace bench experiments for perturbation screen
 Relevance and Novelty
 What are the key related works and trends in this field, and how does your approach offer something new?
 
-
 ---
 
 Based on this, it seems like we need an actual idea before getting compute grants.
+
+# 07/20/2025
+
+Some links:
+
+Jax code that I know works:
+
+* https://github.com/samuelstevens/mlm-pretraining
+* https://github.com/samuelstevens/frx
+
+Tutorials on anndata:
+
+* https://anndata.readthedocs.io/en/stable/tutorials/notebooks/getting-started.html
+* https://scverse-tutorials.readthedocs.io/en/latest/notebooks/anndata_getting_started.html
+
+Biological primer for ML folks:
+
+* https://fleetwood.dev/posts/virtual-cell-challenge

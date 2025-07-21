@@ -1,3 +1,14 @@
+# experiments/00_mean_baseline.py
+"""
+On my laptop:
+
+uv run experiments/00_mean_baseline.py --cells-per-pert 1 --controls 1
+
+Then:
+
+uv run cell-eval prep -i outputs/00/preds.h5ad --g data/vcc_data/gene_names.csv -o outputs/00/preds.vcc
+"""
+
 import dataclasses
 import logging
 import pathlib
@@ -18,11 +29,11 @@ logger = logging.getLogger("00")
 @beartype.beartype
 @dataclasses.dataclass(frozen=True)
 class Config:
-    """Generate the cell-mean baseline `.vcc` submission."""
+    """Generate the cell-mean baseline `.h5ad` file."""
 
     train_path: pathlib.Path = pathlib.Path("data/vcc_data/adata_Training.h5ad")
     gene_list: pathlib.Path = pathlib.Path("data/vcc_data/gene_names.csv")
-    out_path: pathlib.Path = pathlib.Path("outputs/mean_baseline.vcc")
+    out_path: pathlib.Path = pathlib.Path("outputs/00/preds.h5ad")
     cells_per_pert: int = 512
     controls: int = 2048
     chunk_size: int = 1_000
@@ -36,7 +47,7 @@ def main(cfg: Config):
 
     # Calculate mean for each gene across all cells.
     n_cells, n_genes = adata.shape
-    accum = np.zeros(n_genes, dtype=np.float64)
+    accum = np.zeros(n_genes, dtype=np.float32)
     seen = 0
 
     for sub, start, end in vcell.helpers.progress(
@@ -46,8 +57,6 @@ def main(cfg: Config):
         seen += end - start
 
     mean_vec = accum / seen
-
-    # breakpoint()
 
     # 3) Build synthetic cells
     synthetic = np.repeat(
@@ -65,7 +74,6 @@ def main(cfg: Config):
             for _ in range(cfg.cells_per_pert)
         ]
     })
-    breakpoint()
     out = ad.AnnData(
         synthetic,
         obs=obs.to_pandas(),
