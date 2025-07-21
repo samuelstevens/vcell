@@ -1,4 +1,12 @@
 # experiments/01_mlp.py
+"""
+Uses a simple embedding to predict a transcriptome from a perturbation.
+
+The goal is to pre-train on the Replogle dataset for all genes in the virtual cell challenge, then fine-tune the model's MLP on the H1 cell data from the challenge, then evaluate on the unseen perturbations.
+
+Unfortunately, my dataloader isn't working and I have to work on my actual PhD so I'm pushing this code to GitHub and coming back to it later. Feel free to fix it yourself.
+"""
+
 import collections.abc
 import dataclasses
 import json
