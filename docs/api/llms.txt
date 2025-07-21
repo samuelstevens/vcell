@@ -257,11 +257,3 @@ def current_git_commit() -> str | None:
     except (FileNotFoundError, subprocess.CalledProcessError):
         return None
 
->>>> main.py
-def main():
-    print("Hello from vcell!")
-
-
-if __name__ == "__main__":
-    main()
-

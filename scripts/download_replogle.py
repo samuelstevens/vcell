@@ -1,10 +1,16 @@
 # scripts/download_replogle.py
-import os
+import logging
+import pathlib
 
 import beartype
 import requests
 import tyro
-import vcell.helpers
+
+from vcell.helpers import progress
+
+log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=log_format)
+logger = logging.getLogger("replogle")
 
 urls = (
     "https://zenodo.org/records/7041849/files/ReplogleWeissman2022_K562_essential.h5ad",
@@ -13,32 +19,51 @@ urls = (
 
 
 @beartype.beartype
-def main(dump_to: str, chunk_size_kb: int = 10, download: bool = True):
-    os.makedirs(dump_to, exist_ok=True)
+def main(dump_to: str, chunk_size_kb: int = 10):
+    """Download Replogle et al. 2022 datasets.
+
+    Args:
+        dump_to: Directory to save downloaded files
+        chunk_size_kb: Download chunk size in KB
+    """
+
+    dump_path = pathlib.Path(dump_to)
+    dump_path.mkdir(parents=True, exist_ok=True)
 
     chunk_size = int(chunk_size_kb * 1024)
 
-    if download:
-        for url in urls:
-            # Download images.
-            r = requests.get(images_url, stream=True)
-            r.raise_for_status()
+    for url in urls:
+        # Extract filename from URL
+        filename = url.split("/")[-1]
+        fpath = dump_path / filename
 
-            # Needs to be updated to vcell.helpers.progress.
-            t = tqdm.tqdm(
-                total=int(r.headers["content-length"]),
-                unit="B",
-                unit_scale=1,
-                unit_divisor=1024,
-                desc="Downloading images",
+        logger.info(f"Downloading {filename}...")
+
+        # Download file
+        r = requests.get(url, stream=True)
+        r.raise_for_status()
+
+        # Get total size
+        total_size = int(r.headers.get("content-length", 0))
+
+        # Calculate total chunks for progress tracking
+        total_chunks = (total_size + chunk_size - 1) // chunk_size
+
+        # Download with progress
+        with open(fpath, "wb") as fd:
+            chunks = progress(
+                r.iter_content(chunk_size=chunk_size),
+                desc=filename,
+                total=total_chunks,
+                every=total_chunks // 50,
             )
-            with open(fpath, "wb") as fd:
-                for chunk in r.iter_content(chunk_size=chunk_size):
+            for chunk in chunks:
+                if chunk:  # filter out keep-alive chunks
                     fd.write(chunk)
-                    t.update(len(chunk))
-            t.close()
 
-        print(f"Downloaded images: {images_zip_path}.")
+        logger.info(f"Downloaded: {fpath}")
+
+    logger.info(f"All files downloaded to: {dump_path}")
 
 
 if __name__ == "__main__":

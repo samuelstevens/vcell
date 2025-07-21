@@ -8,10 +8,14 @@ dependencies = [
     "anndata>=0.12.0",
     "beartype>=0.21.0",
     "cell-eval>=0.5.41",
+    "chex>=0.1.89",
+    "equinox>=0.13.0",
     "jax>=0.6.2",
     "jaxtyping>=0.3.2",
+    "optax>=0.2.5",
     "polars>=1.31.0",
     "pyarrow>=21.0.0",
+    "requests>=2.32.4",
     "tyro>=0.9.26",
 ]
 
