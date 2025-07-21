@@ -71,7 +71,8 @@ def main(cfg: Config):
         obs=obs.to_pandas(),
         var=pl.DataFrame({"gene_symbol": genes}).to_pandas().set_index("gene_symbol"),
     )
-    # make the parent directory of cfg.out_path with pathlib.Path.parent.makedirs or such. It's okay if it exists already. Also create all parent directories. AI!
+    # Create parent directories for output path
+    cfg.out_path.parent.mkdir(parents=True, exist_ok=True)
     out.write_h5ad(cfg.out_path.with_suffix(".h5ad"))
 
 
