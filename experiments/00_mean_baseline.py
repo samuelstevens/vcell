@@ -22,8 +22,7 @@ class Config:
 
 @beartype.beartype
 def main(cfg: Config):
-    # cfg.gene_list is just a gene per line separate by new lines. Use pathlib.Path's read file utility to read this to a list instead of polars. AI!
-    genes = pl.read_csv(cfg.gene_list, header=None)[0].tolist()
+    genes = cfg.gene_list.read_text().strip().split('\n')
     adata = ad.read_h5ad(cfg.train_path)
 
     # 1) Re-index to guarantee correct gene order
