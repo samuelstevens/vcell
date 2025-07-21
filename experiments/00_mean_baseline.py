@@ -1,5 +1,7 @@
 # experiments/00_mean_baseline.py
 """
+Generate the trivial "cell-mean" submission for the Virtual Cell Challenge.
+
 On my laptop:
 
 uv run experiments/00_mean_baseline.py --cells-per-pert 1 --controls 1
@@ -7,6 +9,33 @@ uv run experiments/00_mean_baseline.py --cells-per-pert 1 --controls 1
 Then:
 
 uv run cell-eval prep -i outputs/00/preds.h5ad --g data/vcc_data/gene_names.csv -o outputs/00/preds.vcc
+
+Explanation
+===========
+
+Let
+
+    X in R^{N x G}   be the training matrix of N cells and G = 18_080 genes
+    y in {non-targeting} U {gene symbols}  be the perturbation label for each row of X
+
+1. Compute a single global mean transcriptome
+
+       mu_g = (1 / N) * sum_{i=1..N} X_{i,g}      for g = 1..G
+
+   producing the vector mu in R^{1 x G}.  We iterate over X in small chunks so only O(G) RAM is required.
+
+2. Decide the number of synthetic rows to emit
+
+       total_rows = n_controls + cells_per_pert * n_pert
+
+   where `n_pert` is the number of distinct perturbation genes in the training file (the control label "non-targeting" is excluded).
+
+3. Build the output matrix
+
+       synthetic = repeat(mu, total_rows, axis=0)      # shape: (total_rows,G)
+
+   Every row is identical; there is *no* intra- or inter-perturbation
+   variance.
 """
 
 import dataclasses
