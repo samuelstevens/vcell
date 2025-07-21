@@ -1,6 +1,7 @@
 # scripts/download_replogle.py
 import logging
 import pathlib
+from typing import Literal
 
 import beartype
 import requests
@@ -12,18 +13,23 @@ log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
 logger = logging.getLogger("replogle")
 
-urls = (
-    "https://zenodo.org/records/7041849/files/ReplogleWeissman2022_K562_essential.h5ad",
-    "https://zenodo.org/records/7041849/files/ReplogleWeissman2022_K562_gwps.h5ad",
-)
+url_map = {
+    "essential": "https://zenodo.org/records/7041849/files/ReplogleWeissman2022_K562_essential.h5ad",
+    "gwps": "https://zenodo.org/records/7041849/files/ReplogleWeissman2022_K562_gwps.h5ad",
+}
 
 
 @beartype.beartype
-def main(dump_to: str, chunk_size_kb: int = 10):
+def main(
+    dump_to: str,
+    dataset: Literal["essential", "gwps", "both"] = "both",
+    chunk_size_kb: int = 10,
+):
     """Download Replogle et al. 2022 datasets.
 
     Args:
         dump_to: Directory to save downloaded files
+        dataset: Which dataset(s) to download: "essential", "gwps", or "both"
         chunk_size_kb: Download chunk size in KB
     """
 
@@ -32,7 +38,17 @@ def main(dump_to: str, chunk_size_kb: int = 10):
 
     chunk_size = int(chunk_size_kb * 1024)
 
-    for url in urls:
+    # Determine which URLs to download
+    if dataset == "both":
+        urls_to_download = list(url_map.values())
+        datasets_to_download = list(url_map.keys())
+    else:
+        urls_to_download = [url_map[dataset]]
+        datasets_to_download = [dataset]
+
+    logger.info(f"Downloading dataset(s): {', '.join(datasets_to_download)}")
+
+    for url in urls_to_download:
         # Extract filename from URL
         filename = url.split("/")[-1]
         fpath = dump_path / filename

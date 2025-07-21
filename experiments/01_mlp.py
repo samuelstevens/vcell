@@ -1,24 +1,78 @@
 # experiments/01_mlp.py
-
+import collections.abc
 import dataclasses
 import json
 import logging
 import os
+import pathlib
 import time
 
+import anndata as ad
 import beartype
 import chex
 import equinox as eqx
 import jax
 import jax.experimental.mesh_utils as mesh_utils
 import jax.numpy as jnp
+import numpy as np
 import optax
+import scipy.sparse as sp
 import tyro
 from jaxtyping import Array, Float, Int, jaxtyped
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
 logger = logging.getLogger("01")
+
+
+@beartype.beartype
+@dataclasses.dataclass(frozen=True)
+class Config:
+    seed: int = 42
+    """Random seed."""
+
+    # Model
+    n_perts: int = 200
+    """Number of total possible perturbations."""
+    n_genes: int = 18080
+    """Number of genes."""
+    hidden_d: int = 1024 * 4
+    """Hidden dimension."""
+
+    # Data
+    replogle_essential: pathlib.Path = pathlib.Path(
+        "data/inputs/replogle/ReplogleWeissman2022_K562_essential.h5ad"
+    )
+    replogle_gwps: pathlib.Path = pathlib.Path(
+        "data/inputs/replogle/ReplogleWeissman2022_K562_gwps.h5ad"
+    )
+    gene_list: pathlib.Path = pathlib.Path("data/inputs/challenge/gene_names.csv")
+
+    # Optimization
+    learning_rate: float = 0.001
+    """Peak learning rate."""
+    batch_size: int = 1024
+    """Batch size."""
+    beta1: float = 0.9
+    """Adam beta1."""
+    beta2: float = 0.999
+    """Adam beta2."""
+    grad_clip: float = 1.0
+    """Maximum gradient norm. `0` implies no clipping."""
+    weight_decay: float = 0.0001
+    """Weight decay applied to Optax's AdamW optimizer."""
+    n_epochs: int = 90
+    """Number of epochs to train for."""
+
+    # Logging
+    log_every: int = 10
+    """how often to log metrics."""
+    track: bool = True
+    """whether to track with Aim."""
+    ckpt_dir: str = os.path.join(".", "checkpoints")
+    """where to store model checkpoints."""
+    tags: list[str] = dataclasses.field(default_factory=list)
+    """any tags for this specific run."""
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -48,49 +102,6 @@ class Model(eqx.Module):
 
 
 @beartype.beartype
-@dataclasses.dataclass(frozen=True)
-class Config:
-    seed: int = 42
-    """Random seed."""
-
-    # Model
-    n_perts: int = 200
-    """Number of total possible perturbations."""
-    n_genes: int = 18080
-    """Number of genes."""
-    hidden_d: int = 1024 * 4
-    """Hidden dimension."""
-
-    # Data
-
-    # Optimization
-    learning_rate: float = 0.001
-    """Peak learning rate."""
-    beta1: float = 0.9
-    """Adam beta1."""
-    beta2: float = 0.999
-    """Adam beta2."""
-    grad_clip: float = 1.0
-    """Maximum gradient norm. `0` implies no clipping."""
-    grad_accum: int = 1
-    """Number of steps to accumulate gradients for. `1` implies no accumulation."""
-    weight_decay: float = 0.0001
-    """Weight decay applied to Optax's AdamW optimizer."""
-    n_epochs: int = 90
-    """Number of epochs to train for."""
-
-    # Logging
-    log_every: int = 10
-    """how often to log metrics."""
-    track: bool = True
-    """whether to track with Aim."""
-    ckpt_dir: str = os.path.join(".", "checkpoints")
-    """where to store model checkpoints."""
-    tags: list[str] = dataclasses.field(default_factory=list)
-    """any tags for this specific run."""
-
-
-@beartype.beartype
 def save(filename: str, cfg: Config, model):
     with open(filename, "wb") as fd:
         cfg_str = json.dumps(cfg)
@@ -101,31 +112,25 @@ def save(filename: str, cfg: Config, model):
 @jaxtyped(typechecker=beartype.beartype)
 def compute_loss(
     model: eqx.Module,
-    images: Float[Array, "batch 3 width height"],
-    labels: Float[Array, "batch n_class"],
-    *,
-    keys: list[chex.PRNGKey],
-):
-    logits = jax.vmap(model, in_axes=(0, None, 0))(images, False, jnp.array(keys))
-    loss = optax.safe_softmax_cross_entropy(logits, labels)
+    pert: Int[Array, " batch"],
+    expr: Float[Array, "batch n_genes"],
+) -> Float[Array, ""]:
+    logits = jax.vmap(model)(pert)
+    loss = jnp.mean((logits - expr) ** 2)
 
-    return jnp.mean(loss)
+    return loss
 
 
 @jaxtyped(typechecker=beartype.beartype)
 @eqx.filter_jit(donate="all")
 def step_model(
     model: eqx.Module,
-    optim: optax.GradientTransformation | optax.MultiSteps,
-    state: optax.OptState | optax.MultiStepsState,
-    images: Float[Array, "batch 3 width height"],
-    labels: Float[Array, "batch n_class"],
-    *,
-    keys: list[chex.PRNGKey],
-):
-    loss, grads = eqx.filter_value_and_grad(compute_loss)(
-        model, images, labels, keys=keys
-    )
+    optim: optax.GradientTransformation,
+    state: optax.OptState,
+    pert: Int[Array, " batch"],
+    expr: Float[Array, "batch n_genes"],
+) -> tuple[eqx.Module, optax.OptState, Float[Array, ""]]:
+    loss, grads = eqx.filter_value_and_grad(compute_loss)(model, pert, expr)
     (updates,), new_state = optim.update([grads], state, [model])
 
     model = eqx.apply_updates(model, updates)
@@ -133,43 +138,39 @@ def step_model(
     return model, new_state, loss
 
 
-@jaxtyped(typechecker=beartype.beartype)
-def evaluate(model: eqx.Module, dataloader, key: chex.PRNGKey) -> dict[str, object]:
-    """ """
+@beartype.beartype
+def stream_batches(
+    file_path: pathlib.Path,
+    gene_list: list[str],
+    *,
+    batch_size: int,
+    shuffle: bool = True,
+    seed: int = 0,
+) -> collections.abc.Iterable[dict[str, Array]]:
+    """Yield dicts with 'pert' (int id) and 'expr' (float32[G])"""
+    adata = ad.read_h5ad(file_path, backed="r")
+    # map gene order once
+    gene_idx = np.where(np.isin(adata.var_names, gene_list))[0]
 
-    @jaxtyped(typechecker=beartype.beartype)
-    @eqx.filter_jit(donate="all-except-first")
-    def _compute_loss(
-        model: eqx.Module,
-        images: Float[Array, "b 3 w h"],
-        keys,
-        labels: Int[Array, " b"],
-    ) -> tuple[Float[Array, ""], Float[Array, "b n_classes"]]:
-        logits = jax.vmap(model, in_axes=(0, None, 0))(images, True, jnp.array(subkeys))
-        loss = optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
-        return loss, logits
+    # map perturb labels to int ids
+    perts = np.asarray(adata.obs["target_gene"], dtype="U")
+    pert2id = {g: i for i, g in enumerate(np.unique(perts), start=1)}
+    pert_ids = np.vectorize(pert2id.get)(perts).astype(np.int32)  # 0 is unused
 
-    metrics = {"loss": []}
+    idxs = np.arange(adata.n_obs)
+    if shuffle:
+        rng = np.random.default_rng(seed)
+        rng.shuffle(idxs)
 
-    for batch in dataloader:
-        images = jnp.asarray(batch["image"])
-        labels = jnp.asarray(batch["label"])
-        key, *subkeys = jax.random.split(key, num=len(labels) + 1)
-        loss, logits = _compute_loss(model, images, jnp.array(subkeys), labels)
-        metrics["loss"].append(loss)
-
-        _, indices = jax.lax.top_k(logits, k=5)
-
-        for k in (1, 5):
-            _, indices = jax.lax.top_k(logits, k=k)
-            n_correct = jnp.any(indices == labels[:, None], axis=1).sum()
-
-            name = f"acc{k}"
-            if name not in metrics:
-                metrics[name] = []
-            metrics[name].append(n_correct / len(labels))
-    metrics = {key: jnp.mean(jnp.array(value)).item() for key, value in metrics.items()}
-    return metrics
+    for start in range(0, adata.n_obs, batch_size):
+        sel = idxs[start : start + batch_size]
+        x = adata.X[sel, :][:, gene_idx]  # sparse sub-matrix
+        if sp.issparse(x):
+            x = x.A  # csr -> dense
+        yield {
+            "pert": jnp.array(pert_ids[sel]),
+            "expr": jnp.log1p(jnp.array(x, dtype=jnp.float32)),
+        }
 
 
 @beartype.beartype
@@ -177,15 +178,15 @@ def main(cfg: Config):
     key = jax.random.key(seed=cfg.seed)
     key, model_key = jax.random.split(key)
 
-    # 1. Model
+    # Model
     model_cfg = dict(n_perts=cfg.n_perts, n_genes=cfg.n_genes, hidden_d=cfg.hidden_d)
     model = Model(**model_cfg, key=model_key)
     logger.info("Initialized model.")
-    breakpoint()
 
-    # 2. Dataset
+    # Data
+    gene_list = cfg.gene_list.read_text().strip().split("\n")
 
-    # 3. Train
+    # Optimization
     optim = optax.adamw(
         learning_rate=cfg.learning_rate,
         b1=cfg.beta1,
@@ -208,15 +209,10 @@ def main(cfg: Config):
             "There are %d devices, which is an odd number for multi-GPU training.",
             n_devices,
         )
-    # Image batches have four dimensions: batch x channels x width x height. We want to
-    # split the batch dimension up over all devices. The same applies to labels, but
-    # they only have batch x classes
-    image_sharding = jax.sharding.PositionalSharding(
-        mesh_utils.create_device_mesh((n_devices, 1, 1, 1))
-    )
-    label_sharding = jax.sharding.PositionalSharding(
-        mesh_utils.create_device_mesh((n_devices, 1))
-    )
+    # This is kind of nasty. I don't really understand multi-device training on Jax just yet.
+    mesh = mesh_utils.create_device_mesh((n_devices,))
+    image_sharding = jax.sharding.PositionalSharding(mesh)
+    label_sharding = jax.sharding.PositionalSharding(mesh)
     # We replicate() the sharding because we want an exact copy of the model and
     # optimizer state on each device.
     model, state = eqx.filter_shard((model, state), image_sharding.replicate())
@@ -224,16 +220,18 @@ def main(cfg: Config):
     # 5. Logging and checkpointing
     os.makedirs(cfg.ckpt_dir, exist_ok=True)
 
-    flops_per_iter = 0
-    flops_promised = 38.7e12  # 38.7 TFLOPS for fp16 on A6000
     global_step = 0
     start_time = time.time()
 
-    t1 = time.time()
     for epoch in range(cfg.n_epochs):
-        for b, batch in enumerate(train_dataloader):
-            t0 = t1
-            t1 = time.time()
+        for b, batch in enumerate(
+            stream_batches(
+                cfg.replogle_essential,
+                gene_list,
+                batch_size=cfg.batch_size,
+                seed=cfg.seed,
+            )
+        ):
             key, *subkeys = jax.random.split(key, num=cfg.batch_size + 1)
 
             images = eqx.filter_shard(jnp.asarray(batch["image"]), image_sharding)
@@ -246,46 +244,12 @@ def main(cfg: Config):
 
             if global_step % cfg.log_every == 0:
                 step_per_sec = global_step / (time.time() - start_time)
-                dt = t1 - t0
-                metrics = {
-                    "train/loss": loss.item(),
-                    "perf/step_per_sec": step_per_sec,
-                    "perf/mfu": flops_per_iter / dt / flops_promised,
-                }
                 logger.info(
                     "step: %d, loss: %.5f, step/sec: %.2f",
                     global_step,
                     loss.item(),
                     step_per_sec,
                 )
-
-            if global_step == 10:
-                # Calculate flops one time after a couple iterations.
-                logger.info("Calculating FLOPs per forward/backward pass.")
-                flops_per_iter = (
-                    eqx.filter_jit(step_model)
-                    .lower(model, optim, state, images, labels, keys=subkeys)
-                    .compile()
-                    .compiled.cost_analysis()[0]["flops"]
-                )
-                logger.info("Calculated FLOPs: %d.", flops_per_iter)
-
-        # 4. Evaluate
-        # We want to evaluate on the rest of the training set (minival) as well as (1) the true validation set (2) imagenet v2 and (3) imagenet real. Luckily this is the same 1K classes so we can simply do inference without any fitting.
-        for name, dataloader in val_dataloaders.items():
-            key, subkey = jax.random.split(key)
-            logger.info("Evaluating %s.", name)
-            metrics = evaluate(model, dataloader, subkey)
-            metrics = {f"{name}/{key}": value for key, value in metrics.items()}
-            run.log(metrics, step=global_step)
-            logger.info(
-                ", ".join(f"{key}: {value:.3f}" for key, value in metrics.items()),
-            )
-        # Record epoch at this step only once.
-        run.log({"epoch": epoch}, step=global_step)
-
-        # Checkpoint.
-        save(os.path.join(args.ckpt_dir, f"{run.id}_ep{epoch}.eqx"), model_cfg, model)
 
 
 if __name__ == "__main__":
