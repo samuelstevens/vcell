@@ -8,6 +8,7 @@ Unfortunately, my dataloader isn't working and I have to work on my actual PhD s
 """
 
 import collections.abc
+import csv
 import dataclasses
 import json
 import logging
@@ -24,9 +25,10 @@ import jax.experimental.mesh_utils as mesh_utils
 import jax.numpy as jnp
 import numpy as np
 import optax
-import scipy.sparse as sp
 import tyro
 from jaxtyping import Array, Float, Int, jaxtyped
+
+import vcell.helpers
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
@@ -44,17 +46,15 @@ class Config:
     """Number of total possible perturbations."""
     n_genes: int = 18080
     """Number of genes."""
-    hidden_d: int = 1024 * 4
+    d_hidden: int = 1024 * 4
     """Hidden dimension."""
 
     # Data
-    replogle_essential: pathlib.Path = pathlib.Path(
+    replogle: pathlib.Path = pathlib.Path(
         "data/inputs/replogle/ReplogleWeissman2022_K562_essential.h5ad"
     )
-    replogle_gwps: pathlib.Path = pathlib.Path(
-        "data/inputs/replogle/ReplogleWeissman2022_K562_gwps.h5ad"
-    )
-    gene_list: pathlib.Path = pathlib.Path("data/inputs/challenge/gene_names.csv")
+    genes_path: pathlib.Path = pathlib.Path("data/inputs/vcc/gene_names.csv")
+    perts_path: pathlib.Path = pathlib.Path("data/inputs/vcc/perts.json")
 
     # Optimization
     learning_rate: float = 0.001
@@ -89,24 +89,24 @@ class Model(eqx.Module):
     linear1: eqx.nn.Linear
     linear2: eqx.nn.Linear
 
-    def __init__(self, n_perts: int, n_genes: int, hidden_d: int, *, key: chex.PRNGKey):
+    def __init__(self, n_perts: int, n_genes: int, d_hidden: int, *, key: chex.PRNGKey):
         key0, key1, key2 = jax.random.split(key, 3)
         self.perts = eqx.nn.Embedding(
             num_embeddings=n_perts + 1, embedding_size=n_genes, key=key0
         )
-        self.linear1 = eqx.nn.Linear(n_genes, hidden_d, key=key1)
-        self.linear2 = eqx.nn.Linear(hidden_d, n_genes, key=key2)
+        self.linear1 = eqx.nn.Linear(n_genes, d_hidden, key=key1)
+        self.linear2 = eqx.nn.Linear(d_hidden, n_genes, key=key2)
 
     def __call__(
         self, pert: Int[Array, ""], *, key: chex.PRNGKey | None = None
     ) -> Float[Array, " n_genes"]:
-        x = self.perts(pert)
+        x_d = self.perts(pert)
         # Feed embedding through the MLP.
-        x = jax.vmap(self.linear1)(x)
-        x = jax.nn.gelu(x)
-        x = jax.vmap(self.linear2)(x)
+        x_h = self.linear1(x_d)
+        x_h = jax.nn.gelu(x_d)
+        x_d = self.linear2(x_h)
 
-        return x
+        return x_d
 
 
 @beartype.beartype
@@ -147,38 +147,83 @@ def step_model(
 
 
 @beartype.beartype
-def stream_batches(
-    file_path: pathlib.Path,
-    gene_list: list[str],
-    *,
-    batch_size: int,
-    shuffle: bool = True,
-    seed: int = 0,
-) -> collections.abc.Iterable[dict[str, Array]]:
-    """Yield dicts with 'pert' (int id) and 'expr' (float32[G])"""
-    adata = ad.read_h5ad(file_path, backed="r")
-    # map gene order once
-    gene_idx = np.where(np.isin(adata.var_names, gene_list))[0]
+class DataLoader:
+    """
+    This is not a long-term solution to dataloading.
 
-    # map perturb labels to int ids
-    perts = np.asarray(adata.obs["target_gene"], dtype="U")
-    pert2id = {g: i for i, g in enumerate(np.unique(perts), start=1)}
-    pert_ids = np.vectorize(pert2id.get)(perts).astype(np.int32)  # 0 is unused
+    Some points:
+    - Not every dataset has every gene in the transcriptome. Specifically, the Replogle dataset only has ~7K of the ~18K in vcc. We simply set them to 0 before log1p.
+    -
+    """
 
-    idxs = np.arange(adata.n_obs)
-    if shuffle:
-        rng = np.random.default_rng(seed)
-        rng.shuffle(idxs)
+    def __init__(
+        self,
+        h5ad_path: pathlib.Path,
+        *,
+        vcc_perts: list[str],
+        genes: list[str],
+        batch_size: int,
+        shuffle: bool = False,
+        key: chex.PRNGKey | None = None,
+    ):
+        if shuffle:
+            assert key is not None, "Need a key when shuffle is True."
 
-    for start in range(0, adata.n_obs, batch_size):
-        sel = idxs[start : start + batch_size]
-        x = adata.X[sel, :][:, gene_idx]  # sparse sub-matrix
-        if sp.issparse(x):
-            x = x.A  # csr -> dense
-        yield {
-            "pert": jnp.array(pert_ids[sel]),
-            "expr": jnp.log1p(jnp.array(x, dtype=jnp.float32)),
-        }
+        self.h5ad_path = h5ad_path
+        self.vcc_perts = vcc_perts
+        self.genes = genes
+
+        self.batch_size = batch_size
+
+        self.shuffle = shuffle
+        self.key = key
+
+    @staticmethod
+    def load_vcc_val_perts(path: pathlib.Path) -> list[str]:
+        perts = []
+        with open(path) as fd:
+            reader = csv.DictReader(fd)
+            for row in reader:
+                perts.append(row["target_gene"])
+
+        return perts
+
+    def __iter__(
+        self,
+    ) -> collections.abc.Iterable[
+        tuple[Int[Array, " batch"], Float[Array, " batch n_genes"]]
+    ]:
+        adata = ad.read_h5ad(self.h5ad_path, backed="r")
+
+        # Map gene order once
+        ad_genes = adata.var_names.str.upper().to_numpy()
+        vcc_genes = np.asarray(self.genes)
+
+        (vcc_cols,) = np.where(np.isin(vcc_genes, ad_genes))
+        (ad_cols,) = np.where(np.isin(ad_genes, vcc_genes))
+
+        keep_rows = np.isin(adata.obs["gene"].to_numpy(), self.vcc_perts)
+        (row_pool,) = np.where(keep_rows)
+
+        pert2id = {p: i for i, p in enumerate(self.vcc_perts)}
+        pert_ids = np.asarray([pert2id[p] for p in adata.obs["gene"].iloc[row_pool]])
+
+        if self.shuffle:
+            self.key, subkey = jax.random.split(self.key)
+            row_pool = jax.random.permutation(subkey, row_pool)
+
+        for start, end in vcell.helpers.batched_idx(len(row_pool), self.batch_size):
+            rows = np.sort(row_pool[start:end])
+
+            # This line is slow as fuck because it's a ton of random reads.
+            x_bg = adata.X[rows]
+
+            # zero-pad to full 18 080-gene frame
+            bsz, n_ad_genes = x_bg.shape
+            x = np.zeros((bsz, len(self.genes)), dtype=x_bg.dtype)
+            x[:, vcc_cols] = x_bg[:, ad_cols]
+
+            yield pert_ids[start:end], np.log1p(jnp.asarray(x))
 
 
 @beartype.beartype
@@ -187,12 +232,22 @@ def main(cfg: Config):
     key, model_key = jax.random.split(key)
 
     # Model
-    model_cfg = dict(n_perts=cfg.n_perts, n_genes=cfg.n_genes, hidden_d=cfg.hidden_d)
+    model_cfg = dict(n_perts=cfg.n_perts, n_genes=cfg.n_genes, d_hidden=cfg.d_hidden)
     model = Model(**model_cfg, key=model_key)
     logger.info("Initialized model.")
 
     # Data
-    gene_list = cfg.gene_list.read_text().strip().split("\n")
+    key, data_key = jax.random.split(key)
+    genes = cfg.genes_path.read_text().strip().split("\n")
+    perts = json.loads(cfg.perts_path.read_text().strip())
+    dataloader = DataLoader(
+        cfg.replogle,
+        vcc_perts=perts["train"] + perts["val"],
+        genes=genes,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        key=data_key,
+    )
 
     # Optimization
     optim = optax.adamw(
@@ -232,22 +287,13 @@ def main(cfg: Config):
     start_time = time.time()
 
     for epoch in range(cfg.n_epochs):
-        for b, batch in enumerate(
-            stream_batches(
-                cfg.replogle_essential,
-                gene_list,
-                batch_size=cfg.batch_size,
-                seed=cfg.seed,
-            )
-        ):
+        for b, (perts, exprs) in enumerate(dataloader):
             key, *subkeys = jax.random.split(key, num=cfg.batch_size + 1)
 
-            images = eqx.filter_shard(jnp.asarray(batch["image"]), image_sharding)
-            labels = eqx.filter_shard(jnp.asarray(batch["label"]), label_sharding)
-
-            model, state, loss = step_model(
-                model, optim, state, images, labels, keys=subkeys
-            )
+            perts = eqx.filter_shard(jnp.asarray(perts), image_sharding)
+            exprs = eqx.filter_shard(jnp.asarray(exprs), label_sharding)
+            breakpoint()
+            model, state, loss = step_model(model, optim, state, perts, exprs)
             global_step += 1
 
             if global_step % cfg.log_every == 0:

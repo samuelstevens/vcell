@@ -4,7 +4,8 @@ This is the repo for a [virtual cell challenge](https://virtualcellchallenge.org
 
 To install, clone this repository (via SSH is probably easier, but you do you).
 
-In the project root directory, run `uv run python`. The first invocation should create a virtual environment.
+In the project root directory, run `uv run experiments/00_mean_baseline.py`.
+The first invocation should create a virtual environment.
 
 ## Setup
 
