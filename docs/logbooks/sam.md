@@ -38,14 +38,19 @@ Some links:
 
 Jax code that I know works:
 
-* https://github.com/samuelstevens/mlm-pretraining
-* https://github.com/samuelstevens/frx
+- https://github.com/samuelstevens/mlm-pretraining
+- https://github.com/samuelstevens/frx
 
 Tutorials on anndata:
 
-* https://anndata.readthedocs.io/en/stable/tutorials/notebooks/getting-started.html
-* https://scverse-tutorials.readthedocs.io/en/latest/notebooks/anndata_getting_started.html
+- https://anndata.readthedocs.io/en/stable/tutorials/notebooks/getting-started.html
+- https://scverse-tutorials.readthedocs.io/en/latest/notebooks/anndata_getting_started.html
 
 Biological primer for ML folks:
 
-* https://fleetwood.dev/posts/virtual-cell-challenge
+- https://fleetwood.dev/posts/virtual-cell-challenge
+
+# 07/22/2025
+
+- https://biothings-clientpy.readthedocs.io/en/latest/doc/quickstart.html#use-the-client-for-mygene-info-api-genes
+- https://nbviewer.org/gist/newgene/6771106

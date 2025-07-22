@@ -15,6 +15,7 @@ import logging
 import os
 import pathlib
 import time
+import typing as tp
 
 import anndata as ad
 import beartype
@@ -69,18 +70,14 @@ class Config:
     """Maximum gradient norm. `0` implies no clipping."""
     weight_decay: float = 0.0001
     """Weight decay applied to Optax's AdamW optimizer."""
-    n_epochs: int = 90
+    n_epochs: int = 10
     """Number of epochs to train for."""
 
     # Logging
     log_every: int = 10
     """how often to log metrics."""
-    track: bool = True
-    """whether to track with Aim."""
     ckpt_dir: str = os.path.join(".", "checkpoints")
     """where to store model checkpoints."""
-    tags: list[str] = dataclasses.field(default_factory=list)
-    """any tags for this specific run."""
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -92,9 +89,9 @@ class Model(eqx.Module):
     def __init__(self, n_perts: int, n_genes: int, d_hidden: int, *, key: chex.PRNGKey):
         key0, key1, key2 = jax.random.split(key, 3)
         self.perts = eqx.nn.Embedding(
-            num_embeddings=n_perts + 1, embedding_size=n_genes, key=key0
+            num_embeddings=n_perts + 1, embedding_size=d_hidden, key=key0
         )
-        self.linear1 = eqx.nn.Linear(n_genes, d_hidden, key=key1)
+        self.linear1 = eqx.nn.Linear(d_hidden, d_hidden, key=key1)
         self.linear2 = eqx.nn.Linear(d_hidden, n_genes, key=key2)
 
     def __call__(
@@ -103,7 +100,7 @@ class Model(eqx.Module):
         x_d = self.perts(pert)
         # Feed embedding through the MLP.
         x_h = self.linear1(x_d)
-        x_h = jax.nn.gelu(x_d)
+        x_h = jax.nn.gelu(x_h)
         x_d = self.linear2(x_h)
 
         return x_d
@@ -134,10 +131,10 @@ def compute_loss(
 def step_model(
     model: eqx.Module,
     optim: optax.GradientTransformation,
-    state: optax.OptState,
+    state: tp.Any,
     pert: Int[Array, " batch"],
     expr: Float[Array, "batch n_genes"],
-) -> tuple[eqx.Module, optax.OptState, Float[Array, ""]]:
+) -> tuple[eqx.Module, tp.Any, Float[Array, ""]]:
     loss, grads = eqx.filter_value_and_grad(compute_loss)(model, pert, expr)
     (updates,), new_state = optim.update([grads], state, [model])
 
@@ -292,18 +289,25 @@ def main(cfg: Config):
 
             perts = eqx.filter_shard(jnp.asarray(perts), image_sharding)
             exprs = eqx.filter_shard(jnp.asarray(exprs), label_sharding)
-            breakpoint()
             model, state, loss = step_model(model, optim, state, perts, exprs)
             global_step += 1
 
             if global_step % cfg.log_every == 0:
                 step_per_sec = global_step / (time.time() - start_time)
                 logger.info(
-                    "step: %d, loss: %.5f, step/sec: %.2f",
+                    "epoch: %d, step: %d, loss: %.5f, step/sec: %.2f",
+                    epoch,
                     global_step,
                     loss.item(),
                     step_per_sec,
                 )
+
+    # After pre-training on the replogle data, we fine-tune the MLP on vcc train data.
+    # TODO: implement. :)
+    print("TODO: implement fine-tuning.")
+
+    # After fine-tuning on the vcc train data, we make predictions on the vcc val data.
+    breakpoint()
 
 
 if __name__ == "__main__":
