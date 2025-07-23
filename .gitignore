@@ -12,3 +12,7 @@ wheels/
 .aider*
 data/
 docs/assets/
+uv.lock
+
+# Output files
+outputs/
