@@ -91,7 +91,7 @@ def main(cfg: Config):
     # 3) Build synthetic cells
     synthetic = np.repeat(
         mean_vec.reshape(1, -1),
-        1 + cfg.cells_per_pert * len(adata.obs["target_gene"].unique()),
+        cfg.controls + cfg.cells_per_pert * len(adata.obs["target_gene"].unique()),
         axis=0,
     )
 
