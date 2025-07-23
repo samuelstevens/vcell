@@ -1,5 +1,7 @@
 # vcell
 
+[Shared Google Doc](https://docs.google.com/document/d/1oHJQUAFk9mrhPrLqkglq_e3yufYDEOKCF3VvDT-MHpc/edit?usp=sharing)
+
 This is the repo for a [virtual cell challenge](https://virtualcellchallenge.org) submission.
 
 To install, clone this repository (via SSH is probably easier, but you do you).

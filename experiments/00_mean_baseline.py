@@ -75,6 +75,7 @@ def main(cfg: Config):
     adata = ad.read_h5ad(cfg.train_path, backed="r")
 
     # Calculate mean for each gene across all cells.
+    # Because the dataset is quite large, we stream the computation.
     n_cells, n_genes = adata.shape
     accum = np.zeros(n_genes, dtype=np.float32)
     seen = 0
@@ -90,7 +91,7 @@ def main(cfg: Config):
     # 3) Build synthetic cells
     synthetic = np.repeat(
         mean_vec.reshape(1, -1),
-        cfg.controls + cfg.cells_per_pert * len(adata.obs["target_gene"].unique()),
+        1 + cfg.cells_per_pert * len(adata.obs["target_gene"].unique()),
         axis=0,
     )
 

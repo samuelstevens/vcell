@@ -33,15 +33,10 @@ Throughout the code, variables are annotated with shape suffixes, as [recommende
 
 The key for these suffixes:
 
-* B: batch size
-* W: width in patches (typically 14 or 16)
-* H: height in patches (typically 14 or 16)
-* D: ViT activation dimension (typically 768 or 1024)
-* S: SAE latent dimension (768 x 16, etc)
-* L: Number of latents being manipulated at once (typically 1-5 at a time)
-* C: Number of classes in ADE20K (151)
+* b: batch size
+* d: model dimension
 
-For example, an activation tensor with shape (batch, width, height d_vit) is `acts_BWHD`.
+For example, an batched activation tensor with shape (batch, d_model) is `x_bd`.
 
 ## Testing & Linting
 
@@ -60,11 +55,14 @@ For example, an activation tensor with shape (batch, width, height d_vit) is `ac
 >>>> README.md
 # vcell
 
+[Shared Google Doc](https://docs.google.com/document/d/1oHJQUAFk9mrhPrLqkglq_e3yufYDEOKCF3VvDT-MHpc/edit?usp=sharing)
+
 This is the repo for a [virtual cell challenge](https://virtualcellchallenge.org) submission.
 
 To install, clone this repository (via SSH is probably easier, but you do you).
 
-In the project root directory, run `uv run python`. The first invocation should create a virtual environment.
+In the project root directory, run `uv run experiments/00_mean_baseline.py`.
+The first invocation should create a virtual environment.
 
 ## Setup
 

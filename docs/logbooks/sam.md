@@ -54,3 +54,11 @@ Biological primer for ML folks:
 
 - https://biothings-clientpy.readthedocs.io/en/latest/doc/quickstart.html#use-the-client-for-mygene-info-api-genes
 - https://nbviewer.org/gist/newgene/6771106
+
+# 07/23/2025
+
+Submission is still not passing.
+Desperately working with the arc folks on that.
+
+Other than that, I now have compute with Google TRC.
+So I need to get up to speed on downloading the STATE public data, then we can train a clone of the model and demonstrate that we're not imcompentent.
