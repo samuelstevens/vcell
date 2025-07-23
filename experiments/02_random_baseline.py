@@ -16,7 +16,7 @@ from jaxtyping import Int64, Shaped, jaxtyped
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
-logger = logging.getLogger("01")
+logger = logging.getLogger("02")
 
 
 @beartype.beartype
@@ -33,6 +33,8 @@ class Config:
     tr_adata_path: pathlib.Path = pathlib.Path("data/inputs/vcc/adata_Training.h5ad")
 
     out_path: pathlib.Path = pathlib.Path("data/outputs/02/preds.h5ad")
+
+    n_ctrl: int = 1000
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -87,14 +89,16 @@ def main(cfg: Config):
     if "non-targeting" not in adata.obs["target_gene"].unique():
         msg = "Gene-Names are out of order or unequal"
         assert np.all(adata.var_names.values == ntc_adata.var_names.values), msg
-        
+
         # Randomly subsample rows of ntc_adata using numpy indices
-        rng = np.random.RandomState(cfg.seed)
-        ntc_indices = np.arange(ntc_adata.shape[0])
-        sample_size = min(1000, len(ntc_indices))
+        rng = np.random.default_rng(seed=cfg.seed)
+        ntc_indices = np.where(tr_adata.obs["target_gene"] == "non-targeting")[0]
+        sample_size = min(cfg.n_ctrl, len(ntc_indices))
         sampled_indices = rng.choice(ntc_indices, size=sample_size, replace=False)
-        ntc_subset = ntc_adata[sampled_indices]
-        
+        ntc_subset = tr_adata[sampled_indices]
+        logger.info("Sampled %d control samples.", sample_size)
+
+        # This line takes about 5 minutes on my 16GB M1 Pro.
         adata = ad.concat([adata, ntc_subset])
         logger.info("Appended data.")
 

@@ -4,7 +4,9 @@ Uses a simple embedding to predict a transcriptome from a perturbation.
 
 The goal is to pre-train on the Replogle dataset for all genes in the virtual cell challenge, then fine-tune the model's MLP on the H1 cell data from the challenge, then evaluate on the unseen perturbations.
 
-Unfortunately, my dataloader isn't working and I have to work on my actual PhD so I'm pushing this code to GitHub and coming back to it later. Feel free to fix it yourself.
+Fine-tuning is a TODO.
+
+One epoch with bsz=1024 takes 6 minutes on my m1 Macbook.
 """
 
 import collections.abc
@@ -175,6 +177,20 @@ class DataLoader:
         self.shuffle = shuffle
         self.key = key
 
+        adata = ad.read_h5ad(self.h5ad_path, backed="r")
+
+        # Map gene order once
+        ad_genes = adata.var_names.str.upper().to_numpy()
+        vcc_genes = np.asarray(self.genes)
+
+        (self.vcc_cols,) = np.where(np.isin(vcc_genes, ad_genes))
+        (self.ad_cols,) = np.where(np.isin(ad_genes, vcc_genes))
+
+        keep_rows = np.isin(adata.obs["gene"].to_numpy(), self.vcc_perts)
+        (self.row_pool,) = np.where(keep_rows)
+
+        self.pert2id = {p: i for i, p in enumerate(self.vcc_perts)}
+
     @staticmethod
     def load_vcc_val_perts(path: pathlib.Path) -> list[str]:
         perts = []
@@ -192,22 +208,15 @@ class DataLoader:
     ]:
         adata = ad.read_h5ad(self.h5ad_path, backed="r")
 
-        # Map gene order once
-        ad_genes = adata.var_names.str.upper().to_numpy()
-        vcc_genes = np.asarray(self.genes)
-
-        (vcc_cols,) = np.where(np.isin(vcc_genes, ad_genes))
-        (ad_cols,) = np.where(np.isin(ad_genes, vcc_genes))
-
-        keep_rows = np.isin(adata.obs["gene"].to_numpy(), self.vcc_perts)
-        (row_pool,) = np.where(keep_rows)
-
-        pert2id = {p: i for i, p in enumerate(self.vcc_perts)}
-        pert_ids = np.asarray([pert2id[p] for p in adata.obs["gene"].iloc[row_pool]])
+        pert_ids = np.asarray([
+            self.pert2id[p] for p in adata.obs["gene"].iloc[self.row_pool]
+        ])
 
         if self.shuffle:
             self.key, subkey = jax.random.split(self.key)
-            row_pool = jax.random.permutation(subkey, row_pool)
+            row_pool = jax.random.permutation(subkey, self.row_pool)
+        else:
+            row_pool = self.row_pool
 
         for start, end in vcell.helpers.batched_idx(len(row_pool), self.batch_size):
             rows = np.sort(row_pool[start:end])
@@ -218,7 +227,7 @@ class DataLoader:
             # zero-pad to full 18 080-gene frame
             bsz, n_ad_genes = x_bg.shape
             x = np.zeros((bsz, len(self.genes)), dtype=x_bg.dtype)
-            x[:, vcc_cols] = x_bg[:, ad_cols]
+            x[:, self.vcc_cols] = x_bg[:, self.ad_cols]
 
             yield pert_ids[start:end], np.log1p(jnp.asarray(x))
 
@@ -307,7 +316,18 @@ def main(cfg: Config):
     print("TODO: implement fine-tuning.")
 
     # After fine-tuning on the vcc train data, we make predictions on the vcc val data.
-    breakpoint()
+    val_perts = [dataloader.pert2id[p] for p in perts["val"]]
+    assert len(val_perts) <= cfg.batch_size
+    preds = jax.vmap(model)(jnp.array(val_perts))
+
+    obs = pd.DataFrame({
+        "target_gene": (["non-targeting"] * cfg.controls)
+        + [
+            g
+            for g in adata.obs["target_gene"].unique()
+            for _ in range(cfg.cells_per_pert)
+        ]
+    })
 
 
 if __name__ == "__main__":
