@@ -43,6 +43,7 @@ I symlink CLAUDE.md to AGENTS.md so that Claude Code will read it.
 You need to make an account on [https://virtualcellchallenge.org](https://virtualcellchallenge.org) and then you can download the data.
 The data provided by the challenge is 15GB.
 
+Data should be extracted to the root project folder. Final structure will look like: `/vcell/data/vcc_data`.
 ## Baseline
 
 
