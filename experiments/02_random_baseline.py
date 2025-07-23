@@ -87,10 +87,15 @@ def main(cfg: Config):
     if "non-targeting" not in adata.obs["target_gene"].unique():
         msg = "Gene-Names are out of order or unequal"
         assert np.all(adata.var_names.values == ntc_adata.var_names.values), msg
-        breakpoint()
-        # Randomly subsample rows of ntc_adata using numpy indices.
-        # Since we cannot apply two views to tr_adata since it is a read-only file-backed matrix, we need to first come up with all the possible indices where target_gene == 'non-targeting', then select a random subset of 1000 of these indices. AI!
-        adata = ad.concat([adata, ntc_adata])
+        
+        # Randomly subsample rows of ntc_adata using numpy indices
+        rng = np.random.RandomState(cfg.seed)
+        ntc_indices = np.arange(ntc_adata.shape[0])
+        sample_size = min(1000, len(ntc_indices))
+        sampled_indices = rng.choice(ntc_indices, size=sample_size, replace=False)
+        ntc_subset = ntc_adata[sampled_indices]
+        
+        adata = ad.concat([adata, ntc_subset])
         logger.info("Appended data.")
 
     cfg.out_path.parent.mkdir(parents=True, exist_ok=True)
