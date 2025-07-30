@@ -8,11 +8,16 @@ wheels/
 
 # Virtual environments
 .venv
-.DS_Store
-.aider*
-data/
-docs/assets/
 uv.lock
 
 # Output files
 outputs/
+
+# Testing
+.hypothesis/
+
+# Binary/bad files
+.DS_Store
+.aider*
+/data/
+docs/assets/

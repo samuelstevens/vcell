@@ -10,12 +10,14 @@ dependencies = [
     "cell-eval>=0.5.41",
     "chex>=0.1.89",
     "equinox>=0.13.0",
+    "grain>=0.2.11",
     "jax>=0.6.2",
     "jaxtyping>=0.3.2",
     "optax>=0.2.5",
     "polars>=1.31.0",
     "pyarrow>=21.0.0",
     "requests>=2.32.4",
+    "scanpy>=1.11.3",
     "tyro>=0.9.26",
 ]
 
@@ -33,7 +35,13 @@ package = true
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.136.6",
     "pdoc3>=0.11.6",
     "pytest>=8.4.1",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.12.4",
 ]
+
+[tool.pytest.ini_options]
+timeout = 300
+timeout_method = "thread"

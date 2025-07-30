@@ -62,3 +62,46 @@ Desperately working with the arc folks on that.
 
 Other than that, I now have compute with Google TRC.
 So I need to get up to speed on downloading the STATE public data, then we can train a clone of the model and demonstrate that we're not imcompentent.
+
+What are some public TODOs for everyone to work on?
+
+1. Download the data. Look at it.
+2. Make a random baseline submission, or a mean expression baseline submission. If you can successfully get a score, you've made progress for the team.
+3. Get Google TRC access. This seems to be a reliable source of TPUs/compute for researchers. We could all take advantage of this. Seems like it's ~$30-60 a month for incidentals besides the TPU VM (static IPs, storage, etc).
+4. Find other free compute grants. I have some at the top of my logbook.
+
+# 07/28/2025
+
+Looking at the dataloading in the STATE model, we need:
+
+1. A dataloader that batches by batch and cell line. This is in Arc institute's [PerturbationBatchSampler](https://github.com/ArcInstitute/cell-load/blob/367708ca193860d79a04f0a02c2d6eb128bbf80b/src/cell_load/data_modules/samplers.py#L16): 
+```py
+class PerturbationBatchSampler(Sampler):
+    """
+    Samples batches ensuring that cells in each batch share the same
+    (cell_type, perturbation) combination, using only H5 codes.
+
+    Instead of grouping by cell type and perturbation names, this sampler
+    groups based on integer codes stored in the H5 file (e.g. `cell_type_codes`
+    and `pert_codes` in the H5MetadataCache). This avoids repeated string operations.
+
+    Supports distributed training.
+    """
+```
+
+However, their implementation uses pytorch samplers to handle this.
+I think we can avoid torch in favor of grain.
+
+But the same problems as always remain.
+Efficient dataloading of a large dataset.
+
+
+# 07/29/2025
+
+I think I will implement a very naive dataloader initially.
+There's no point in writing a beautiful multiprocess'ed dataloader if the naive one is fast enough.
+
+# 08/02/2025
+
+I tried making a naive dataloader for the replogle data to recreate the STATE training.
+I don't know how successful I was.
