@@ -4,8 +4,8 @@ Module vcell.data.naive_dataloader
 Classes
 -------
 
-`Config(h5ad_fpath: pathlib.Path, set_size: int = 256, genes: list[str] = <factory>, pert_col: str = 'target_gene', cell_line_col: str = 'cell_line', control_code: str = 'non-targeting')`
-:   Config(h5ad_fpath: pathlib.Path, set_size: int = 256, genes: list[str] = <factory>, pert_col: str = 'target_gene', cell_line_col: str = 'cell_line', control_code: str = 'non-targeting')
+`Config(h5ad_fpath: pathlib.Path, set_size: int = 256, genes: list[str] = <factory>, pert_col: str = 'target_gene', cell_line_col: str = 'cell_line', control_code: str = 'non-targeting', seed: int = 0)`
+:   Config(h5ad_fpath: pathlib.Path, set_size: int = 256, genes: list[str] = <factory>, pert_col: str = 'target_gene', cell_line_col: str = 'cell_line', control_code: str = 'non-targeting', seed: int = 0)
 
     ### Instance variables
 
@@ -23,6 +23,9 @@ Classes
 
     `pert_col: str`
     :   Column name in the AnnData object that contains perturbation information.
+
+    `seed: int`
+    :   Random seed.
 
     `set_size: int`
     :   Number of cells to include in each example set.

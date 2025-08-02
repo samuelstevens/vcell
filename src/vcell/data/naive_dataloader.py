@@ -32,6 +32,9 @@ class Config:
     control_code: str = "non-targeting"
     """Value that identifies control cells in the perturbation column."""
 
+    seed: int = 0
+    """Random seed."""
+
 
 @beartype.beartype
 class PerturbationDataloader:
@@ -42,7 +45,7 @@ class PerturbationDataloader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.rng = np.random.default_rng()
+        self.rng = np.random.default_rng(seed=cfg.seed)
 
         # Read the h5ad file
         self.adata = sc.read(self.cfg.h5ad_fpath, backed="r")
