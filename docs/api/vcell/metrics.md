@@ -46,7 +46,7 @@ Classes
 -------
 
 `DEDetails(overlap: float, pr_auc: float, spearman_r: float, n_true_sig: int, n_pred_sig: int)`
-:   Immutable-ish result packet for DE agreement metrics.
+:   Immutable result packet for DE agreement metrics.
 
     ### Ancestors (in MRO)
 
@@ -62,13 +62,13 @@ Classes
     :
 
     `overlap: float`
-    :
+    :   e.g., Jaccard/F1 over true-significant genes.
 
     `pr_auc: float`
-    :
+    :   PR-AUC of predicted DE vs true DE.
 
     `spearman_r: float`
-    :
+    :   rank corr of (signed) logFC.
 
 `RunningMean(total: jaxtyping.Float[Array, ''], count: jaxtyping.Float[Array, ''])`
 :   Numerically stable running mean of scalar values.

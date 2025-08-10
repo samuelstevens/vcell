@@ -11,11 +11,14 @@ __all__ = ["DEDetails", "RunningMean", "compute_mae", "compute_pds", "compute_de
 
 @jaxtyped(typechecker=beartype.beartype)
 class DEDetails(eqx.Module):
-    """Immutable-ish result packet for DE agreement metrics."""
+    """Immutable result packet for DE agreement metrics."""
 
-    overlap: float  # e.g., Jaccard/F1 over true-significant genes
-    pr_auc: float  # PR-AUC of predicted DE vs true DE
-    spearman_r: float  # rank corr of (signed) logFC
+    overlap: float
+    """e.g., Jaccard/F1 over true-significant genes."""
+    pr_auc: float
+    """PR-AUC of predicted DE vs true DE."""
+    spearman_r: float
+    """rank corr of (signed) logFC."""
     n_true_sig: int
     n_pred_sig: int
 
