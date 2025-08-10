@@ -44,9 +44,6 @@ You need to make an account on [https://virtualcellchallenge.org](https://virtua
 The data provided by the challenge is 15GB.
 
 Data should be extracted to the root project folder. Final structure will look like: `/vcell/data/vcc_data`.
-## Baseline
-
-
 
 ## Docs
 

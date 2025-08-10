@@ -117,3 +117,28 @@ I picked out the various options here:
 ![Image of my google cloud account, showing that my project trc-project has ID trc-project-466816]()
 
 ![Image of my email from TRC, showing that I have access to `v2-8` TPU VMs in `us-central1-f`]()
+
+
+# 08/10/2025
+
+1. Finish `tools/submit_vcc.py`.
+2. Run `experiments/04_validation.py` to create `pred_raw.h5ad` (memmap path works).
+3. Generate `genes.txt` from `adata_Training.h5ad` and run `cell-eval prep` via `just submit`.
+4. Upload the prepped file on the Evaluation page (<=100k cells, includes controls).
+5. Implement metrics to satisfy tests:
+    * `compute_pds` (L1 distance, exclude target gene, normalized inverse rank, top-k)
+    * `compute_de` (Wilcoxon rank-sum, BH FDR at 0.05, overlap; optional PR-AUC, Spearman)
+6. Train the same model on H1 train:
+    * control set → predicted cells
+    * still use OOV=0 for unseen val IDs
+    * compare to random init via your local metrics
+7. Add a "fixed pseudobulk" mode: predict and then average per-perturbation to reduce variance; measure MAE vs per-cell.
+
+
+Other stuff
+
+-Port a minimal STATE-style mapper (JAX) that consumes control set + perturbation embedding; keep it small.
+-Explore using metadata embeddings (target-gene features) so val IDs aren’t blind.
+-Wire scPerturb (CRISPR-only) loaders and alignment to VCC genes (zero-fill missing genes), then fine-tune.
+-SAE-on-residuals idea: cache ST residuals and train an SAE for interpretability; design a small eval (e.g., residual attribution to DE genes).
+
