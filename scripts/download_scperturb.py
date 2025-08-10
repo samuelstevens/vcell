@@ -1,79 +1,63 @@
 """
 Download scPerturb datasets from Zenodo with resume, checksum, and parallelism.
 
-Defaults to the RNA+protein record (10.5281/zenodo.13350497) and filters to CRISPR-like
-perturbations only. You can tweak the whitelist/blacklist patterns below or pass your own.
+Changes in this version:
+- Defaults to ALL scPerturb datasets (RNA+protein + ATAC) across multiple records.
+- Queries Zenodo API to enumerate files and md5 (no hardcoded filenames).
+- Blacklist-based filtering (optional). Whitelist optional, but default is include-all.
+- Uses atomic *.part files, resume via Range, md5 verification, and bounded re-downloads.
+- Renames existing mismatched files to *.corrupted (with numeric suffix) before re-downloading.
+- Per-record subdirectories by default to avoid filename collisions.
+- Summarized reporting + manifest.json; nonzero exit if failures.
 
 Examples
 --------
 # Dry-run (list what would be downloaded)
 python download_scperturb.py --dry-run -o /data/scperturb
 
-# Download CRISPR-only with 8 workers
+# Download everything from both records with 8 workers
 python download_scperturb.py -o /data/scperturb --workers 8
 
-# Download everything in the record
-python download_scperturb.py -o /data/scperturb --include-all
+# Exclude specific patterns
+python download_scperturb.py -o /data/scperturb --exclude sciplex McFarland
 
-# Override filters (comma-separated substrings)
-python download_scperturb.py -o /data/scperturb \
-  --include "DixitRegev,NormanWeissman" --exclude "sciplex,McFarland,ZhaoSims"
-
-Notes
------
-- Uses Zenodo REST API to enumerate files and md5 checksums.
-- Resumes partial downloads when the server advertises 'Accept-Ranges: bytes'.
-- Verifies md5 digest after download (or skip with --no-check)
-- Writes a manifest.json with names, sizes, md5, and status.
-
+# Only RNA+protein record, flat layout, and no checksum verification
+python download_scperturb.py -o /data/scperturb --records 13350497 --flat --no-check
 """
 
+import collections.abc
 import concurrent.futures as cf
-import contextlib
 import dataclasses
+import datetime as dt
 import hashlib
 import json
+import logging
 import pathlib
 import re
-import sys
 import time
 
 import beartype
 import requests
+import tqdm
 import tyro
 
-ZENODO_RECORD_DEFAULT = "13350497"  # scPerturb RNA+protein h5ad files
-SESSION = requests.Session()
-SESSION.headers.update({"User-Agent": "scperturb-downloader/1.0"})
+# Default to both major scPerturb records:
+# - 13350497: RNA+protein .h5ad bundle
+# - 7058382 : ATAC archives
+RECORD_IDS_DEFAULT = ["13350497", "7058382"]
 
-# Conservative defaults:
-# - Whitelist clearly CRISPR-based datasets by substring
-CRISPR_WHITELIST = [
-    "AdamsonWeissman2016",
-    "DixitRegev2016",
-    "GasperiniShendure2019",
-    "NormanWeissman2019",
-    "ShifrutMarson2018",
-    "TianKampmann2019",
-    "TianKampmann2021_CRISPRa",
-    "TianKampmann2021_CRISPRi",
-    "JoungZhang2023",
-    "SchraivogelSteinmetz2020",
-    "XieHon2017",
-    "FrangiehIzar2021",
-]
-# - Blacklist known drug datasets by substring
-DRUG_BLACKLIST = [
-    "SrivatsanTrapnell2020_sciplex",
-    "McFarlandTsherniak2020",
-    "ZhaoSims2021",
-    "AissaBenevolenskaya2021",
-]
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": "scperturb-downloader/2.0"})
+
+log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=log_format)
+logger = logging.getLogger("scperturb")
 
 
 @beartype.beartype
 @dataclasses.dataclass(frozen=True)
 class FileEntry:
+    record_id: str
     key: str
     size: int
     checksum: str | None
@@ -83,26 +67,15 @@ class FileEntry:
     def md5(self) -> str | None:
         if not self.checksum:
             return None
-        # Zenodo checksum format is usually 'md5:abcdef...'
         if ":" in self.checksum:
             algo, hexd = self.checksum.split(":", 1)
             if algo.lower() == "md5":
                 return hexd
-        # Fallback: assume already hex
         return self.checksum
 
 
 @beartype.beartype
-def list_record_files(record_id: str) -> list[FileEntry]:
-    """Return list of files for a published Zenodo record.
-
-    Handles both legacy and InvenioRDM-style JSON shapes.
-    """
-    api = f"https://zenodo.org/api/records/{record_id}"
-    r = SESSION.get(api, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-
+def _extract_files_from_record_json(record_id: str, data: dict) -> list[FileEntry]:
     entries: list[FileEntry] = []
     files_block = data.get("files")
 
@@ -115,7 +88,15 @@ def list_record_files(record_id: str) -> list[FileEntry]:
             or links.get("self")
             or f"https://zenodo.org/records/{record_id}/files/{key}?download=1"
         )
-        entries.append(FileEntry(key=key, size=int(size), checksum=chksum, url=url))
+        entries.append(
+            FileEntry(
+                record_id=record_id,
+                key=key,
+                size=int(size) if size else 0,
+                checksum=chksum,
+                url=url,
+            )
+        )
 
     if isinstance(files_block, dict) and "entries" in files_block:
         for key, entry in files_block["entries"].items():
@@ -127,41 +108,61 @@ def list_record_files(record_id: str) -> list[FileEntry]:
                 continue
             add_entry(key, entry)
     else:
-        # Fall back to scraping the HTML file list if API schema changes
-        # (not ideal, but gives a usable URL template)
-        # Filenames are stable, so we construct URLs directly.
-        # In this mode we won't have checksums/sizes.
-        print(
-            "Warning: unexpected API shape for 'files'; falling back to name-only.",
-            file=sys.stderr,
-        )
-        # try a minimal list by hitting the HTML and regexing .h5ad names
+        # Fallback: minimally parse HTML to discover filenames (size/md5 may be missing)
         html = SESSION.get(f"https://zenodo.org/records/{record_id}", timeout=60).text
-        for m in re.finditer(r">([A-Za-z0-9_][^\s<>]*?\.h5ad)<", html):
+        for m in re.finditer(r">([A-Za-z0-9_][^\s<>]*?\.(h5ad|zip|tar\.gz))<", html):
             key = m.group(1)
             url = f"https://zenodo.org/records/{record_id}/files/{key}?download=1"
-            entries.append(FileEntry(key=key, size=0, checksum=None, url=url))
-
+            entries.append(
+                FileEntry(record_id=record_id, key=key, size=0, checksum=None, url=url)
+            )
     return entries
+
+
+@beartype.beartype
+def list_record_files(record_id: str) -> list[FileEntry]:
+    api = f"https://zenodo.org/api/records/{record_id}"
+    r = SESSION.get(api, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    return _extract_files_from_record_json(record_id, data)
+
+
+@beartype.beartype
+def list_records_files(record_ids: collections.abc.Iterable[str]) -> list[FileEntry]:
+    all_entries: list[FileEntry] = []
+    for rid in record_ids:
+        all_entries.extend(list_record_files(rid))
+    return all_entries
+
+
+@beartype.beartype
+def _compile_patterns(patterns: collections.abc.Iterable[str]) -> list[re.Pattern]:
+    compiled: list[re.Pattern] = []
+    for p in patterns:
+        # Treat as substring by default; if it looks like a regex, allow it.
+        # We compile as regex either way (re.escape for pure substring handled below).
+        try:
+            compiled.append(re.compile(p))
+        except re.error:
+            compiled.append(re.compile(re.escape(p)))
+    return compiled
 
 
 @beartype.beartype
 def choose_files(
     files: list[FileEntry],
-    include_all: bool,
     include_patterns: list[str],
     exclude_patterns: list[str],
 ) -> list[FileEntry]:
-    if include_all:
-        candidates = files
-    else:
-        # Start with whitelist
-        wl = include_patterns or CRISPR_WHITELIST
-        candidates = [f for f in files if any(p in f.key for p in wl)]
-    # Apply blacklist
-    bl = exclude_patterns or DRUG_BLACKLIST
-    filtered = [f for f in candidates if not any(p in f.key for p in bl)]
-    return filtered
+    keep = files
+    if include_patterns:
+        inc = _compile_patterns(include_patterns)
+        keep = [f for f in keep if any(p.search(f.key) for p in inc)]
+    if exclude_patterns:
+        exc = _compile_patterns(exclude_patterns)
+        keep = [f for f in keep if not any(p.search(f.key) for p in exc)]
+    return keep
 
 
 @beartype.beartype
@@ -179,80 +180,207 @@ def md5sum(path: pathlib.Path, chunk: int = 1024 * 1024) -> str:
 @beartype.beartype
 def head(url: str) -> tuple[int, bool]:
     """Return (size, supports_range)."""
-    with contextlib.suppress(Exception):
+    try:
         resp = SESSION.head(url, timeout=60, allow_redirects=True)
         size = int(resp.headers.get("Content-Length", "0"))
-        accept_ranges = resp.headers.get("Accept-Ranges", "").lower() == "bytes"
+        accept_ranges = "bytes" in resp.headers.get("Accept-Ranges", "").lower()
         return size, accept_ranges
-    return 0, False
+    except requests.RequestException as e:
+        logger.debug(f"HEAD request failed for {url}: {e}")
+        return 0, False
+    except Exception as e:
+        logger.warning(f"Unexpected error in HEAD request for {url}: {e}")
+        return 0, False
+
+
+@beartype.beartype
+def _unique_corrupted_path(path: pathlib.Path) -> pathlib.Path:
+    base = pathlib.Path(str(path) + ".corrupted")
+    if not base.exists():
+        return base
+    idx = 1
+    while True:
+        cand = pathlib.Path(str(path) + f".corrupted.{idx}")
+        if not cand.exists():
+            return cand
+        idx += 1
 
 
 @beartype.beartype
 def download_one(
     entry: FileEntry,
-    outdir: pathlib.Path,
-    retries: int = 5,
-    verify_md5: bool = True,
-    progress: bool = True,
+    dest: pathlib.Path,
+    *,
+    net_retries: int,
+    verify_md5: bool,
+    max_redownloads: int,
+    show_progress: bool,
 ) -> dict:
-    dest = outdir / entry.key
+    """
+    Return dict with fields:
+      name, record_id, size, expected_md5, actual_md5, ok (bool), status, url
+    status ∈ {"downloaded","redownloaded","skip-exists","bad-checksum","failed"}
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
+    part = pathlib.Path(str(dest) + ".part")
 
     remote_size, supports_range = head(entry.url)
-    total = entry.size or remote_size
+    expected_md5 = entry.md5
 
-    resume_pos = dest.stat().st_size if dest.exists() else 0
-    if total and resume_pos >= total:
-        status = "exists"
-    else:
-        status = "downloaded"
-        # Stream download (with resume if possible)
-        for attempt in range(retries):
-            headers = {}
-            if supports_range and resume_pos > 0:
-                headers["Range"] = f"bytes={resume_pos}-"
+    # If final file exists, verify and skip or rename to .corrupted on mismatch
+    if dest.exists():
+        if verify_md5 and expected_md5:
+            actual = md5sum(dest)
+            if actual == expected_md5:
+                return {
+                    "record_id": entry.record_id,
+                    "name": entry.key,
+                    "size": dest.stat().st_size,
+                    "expected_md5": expected_md5,
+                    "actual_md5": actual,
+                    "ok": True,
+                    "status": "skip-exists",
+                    "url": entry.url,
+                }
+            else:
+                corr = _unique_corrupted_path(dest)
+                dest.rename(corr)
+                logger.warning(
+                    f"MD5 mismatch for existing {dest.name}; moved to {corr.name}"
+                )
+        else:
+            # No verification requested or no MD5 supplied: treat as good and skip
+            return {
+                "record_id": entry.record_id,
+                "name": entry.key,
+                "size": dest.stat().st_size,
+                "expected_md5": expected_md5,
+                "actual_md5": None if verify_md5 else "skipped",
+                "ok": True,
+                "status": "skip-exists",
+                "url": entry.url,
+            }
+
+    status = "downloaded"
+    bytes_discarded = 0
+
+    # Attempt bounded re-downloads on MD5 mismatch
+    for redl in range(max_redownloads):
+        # Resume if *.part exists and server supports it
+        resume_pos = part.stat().st_size if part.exists() else 0
+        headers = {}
+        if supports_range and resume_pos > 0:
+            headers["Range"] = f"bytes={resume_pos}-"
+
+        # Network retries with backoff
+        for attempt in range(net_retries):
             try:
                 with SESSION.get(
                     entry.url, stream=True, timeout=120, headers=headers
                 ) as r:
                     r.raise_for_status()
-                    mode = "ab" if headers.get("Range") else "wb"
-                    with dest.open(mode) as f:
+                    mode = "ab" if "Range" in headers else "wb"
+                    total = entry.size or remote_size or None
+                    pbar = None
+                    if show_progress:
+                        pbar = tqdm.tqdm(
+                            total=total,
+                            initial=resume_pos,
+                            unit="B",
+                            unit_scale=True,
+                            desc=f"{entry.record_id}/{entry.key}",
+                            leave=False,
+                        )
+                    with part.open(mode) as f:
                         for chunk in r.iter_content(chunk_size=1024 * 1024):
                             if chunk:
                                 f.write(chunk)
-                                resume_pos += len(chunk)
-                break
+                                if pbar:
+                                    pbar.update(len(chunk))
+                    if pbar:
+                        pbar.close()
+                break  # success, exit net retry loop
             except Exception as e:
                 wait = min(60, 2**attempt)
-                print(
-                    f"Retry {attempt + 1}/{retries} for {entry.key} after error: {e} (sleep {wait}s)"
+                logger.warning(
+                    f"{entry.key}: network error (attempt {attempt + 1}/{net_retries}): {e}; sleeping {wait}s"
                 )
                 time.sleep(wait)
         else:
-            raise RuntimeError(
-                f"Failed to download {entry.key} after {retries} retries"
+            # Exhausted net retries
+            if part.exists():
+                bytes_discarded += part.stat().st_size
+                part.unlink(missing_ok=True)
+            return {
+                "record_id": entry.record_id,
+                "name": entry.key,
+                "size": 0,
+                "expected_md5": expected_md5,
+                "actual_md5": None,
+                "ok": False,
+                "status": "failed",
+                "url": entry.url,
+                "bytes_discarded": bytes_discarded,
+            }
+
+        # Verify MD5 on the assembled *.part, then finalize
+        actual = None
+        ok = True
+        if verify_md5 and expected_md5:
+            actual = md5sum(part)
+            ok = actual == expected_md5
+
+        if ok:
+            # Replace any leftover dest (shouldn't exist after rename branch above)
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+            part.replace(dest)
+            if redl > 0:
+                status = "redownloaded"
+            return {
+                "record_id": entry.record_id,
+                "name": entry.key,
+                "size": dest.stat().st_size,
+                "expected_md5": expected_md5,
+                "actual_md5": actual,
+                "ok": True,
+                "status": status,
+                "url": entry.url,
+                "bytes_discarded": bytes_discarded,
+            }
+        else:
+            # MD5 mismatch: discard *.part and try again (bounded)
+            logger.warning(
+                f"MD5 mismatch for {entry.key} (attempt {redl + 1}/{max_redownloads}); retrying"
             )
+            if part.exists():
+                bytes_discarded += part.stat().st_size
+                part.unlink(missing_ok=True)
 
-    ok = True
-    digest = None
-    if verify_md5 and entry.md5:
-        digest = md5sum(dest)
-        ok = digest == entry.md5
-        if not ok:
-            # If mismatch and server supports range, attempt one clean retry
-            dest.unlink(missing_ok=True)
-            return download_one(entry, outdir, retries=retries, verify_md5=verify_md5)
-
+    # Exceeded max redownload attempts
     return {
+        "record_id": entry.record_id,
         "name": entry.key,
-        "size": dest.stat().st_size if dest.exists() else 0,
-        "expected_md5": entry.md5,
-        "actual_md5": digest,
-        "ok": ok,
-        "status": status,
+        "size": 0,
+        "expected_md5": expected_md5,
+        "actual_md5": None,
+        "ok": False,
+        "status": "bad-checksum",
         "url": entry.url,
     }
+
+
+@beartype.beartype
+def _load_patterns_file(path: pathlib.Path | None) -> list[str]:
+    if not path:
+        return []
+    lines = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if s and not s.startswith("#"):
+                lines.append(s)
+    return lines
 
 
 @beartype.beartype
@@ -261,79 +389,161 @@ class Config:
     """Download scPerturb datasets from Zenodo."""
 
     out: pathlib.Path
-    """Output directory"""
+    """Output directory."""
 
-    record_id: str = ZENODO_RECORD_DEFAULT
-    """Zenodo record ID"""
+    records: list[str] = dataclasses.field(default_factory=lambda: RECORD_IDS_DEFAULT)
+    """Zenodo record IDs."""
 
-    include_all: bool = False
-    """Download all files in the record"""
+    include: list[str] = dataclasses.field(default_factory=list)
+    """Regex/substring patterns to INCLUDE."""
 
-    include: str | None = None
-    """Comma-separated substrings to INCLUDE (overrides builtin whitelist)"""
+    exclude: list[str] = dataclasses.field(default_factory=list)
+    """Regex/substring patterns to EXCLUDE."""
 
-    exclude: str | None = None
-    """Comma-separated substrings to EXCLUDE (overrides builtin blacklist)"""
+    exclude_file: pathlib.Path | None = None
+    """Optional newline-delimited patterns file to EXCLUDE."""
 
     workers: int = 8
-    """Parallel downloads"""
+    """Parallel downloads."""
 
     no_check: bool = False
-    """Skip md5 verification"""
+    """Skip md5 verification."""
 
     dry_run: bool = False
-    """List planned downloads then exit"""
+    """List planned downloads then exit."""
+
+    flat: bool = False
+    """Write files directly under out/ (no per-record subdirs)."""
+
+    max_redownloads: int = 3
+    """Max times to re-download a file after failing MD5 verification."""
+
+    net_retries: int = 5
+    """Retries per network GET attempt (with backoff)."""
+
+    progress: bool = True
+    """Show per-file progress bars."""
 
 
-def main(cfg: Config):
+def main(cfg: Config) -> int:
     outdir = cfg.out
     outdir.mkdir(parents=True, exist_ok=True)
 
-    files = list_record_files(cfg.record_id)
-    include_patterns = (
-        [s.strip() for s in cfg.include.split(",")] if cfg.include else []
-    )
-    exclude_patterns = (
-        [s.strip() for s in cfg.exclude.split(",")] if cfg.exclude else []
-    )
+    # Enumerate all files across records
+    files = list_records_files(cfg.records)
 
+    # Compose filters
+    exclude_patterns = cfg.exclude + _load_patterns_file(cfg.exclude_file)
     files_to_get = choose_files(
-        files,
-        include_all=cfg.include_all,
-        include_patterns=include_patterns,
-        exclude_patterns=exclude_patterns,
+        files, include_patterns=cfg.include, exclude_patterns=exclude_patterns
     )
 
-    print(f"Found {len(files)} files in record {cfg.record_id}.")
-    print(f"Selected {len(files_to_get)} to download.")
+    # Present plan
+    print(
+        f"Found {len(files)} files across {len(cfg.records)} record(s): {', '.join(cfg.records)}"
+    )
+    print(f"Selected {len(files_to_get)} to download.\n")
     for f in files_to_get:
         size_mb = (f.size or 0) / (1024 * 1024)
-        print(f"  - {f.key}  ({size_mb:.1f} MB)")
+        rel = pathlib.Path(f.record_id, f.key) if not cfg.flat else pathlib.Path(f.key)
+        print(f"  - {rel}  ({size_mb:.1f} MB)")
 
     if cfg.dry_run:
         return 0
 
+    # Download
     results: list[dict] = []
+    reused_bytes = 0
+    downloaded_bytes = 0
+    discarded_bytes = 0
+    failures = 0
+
+    def _submit(entry: FileEntry):
+        dest = (
+            (outdir / entry.key) if cfg.flat else (outdir / entry.record_id / entry.key)
+        )
+        res = download_one(
+            entry,
+            dest,
+            net_retries=cfg.net_retries,
+            verify_md5=not cfg.no_check,
+            max_redownloads=cfg.max_redownloads,
+            show_progress=cfg.progress,
+        )
+        return res
+
     with cf.ThreadPoolExecutor(max_workers=cfg.workers) as ex:
-        futs = [
-            ex.submit(download_one, f, outdir, verify_md5=not cfg.no_check)
-            for f in files_to_get
-        ]
+        futs = [ex.submit(_submit, f) for f in files_to_get]
         for fut in cf.as_completed(futs):
             res = fut.result()
             results.append(res)
-            status = "OK" if res["ok"] else "BAD-CHECKSUM"
-            print(f"[{status}] {res['name']} ({res['size'] / 1024 / 1024:.1f} MB)")
+            status = res["status"]
+            name = (
+                f"{res.get('record_id')}/{res.get('name')}"
+                if not cfg.flat
+                else res.get("name")
+            )
+            size_mb = (res.get("size", 0) or 0) / (1024 * 1024)
+            if status == "skip-exists":
+                reused_bytes += res.get("size", 0) or 0
+                print(f"[SKIP-EXISTS] {name} ({size_mb:.1f} MB)")
+            elif status in ("downloaded", "redownloaded"):
+                downloaded_bytes += res.get("size", 0) or 0
+                print(f"[OK] {name} ({size_mb:.1f} MB)")
+            elif status == "bad-checksum":
+                failures += 1
+                discarded_bytes += res.get("bytes_discarded", 0) or 0
+                print(f"[BAD-CHECKSUM] {name}")
+            else:
+                failures += 1
+                discarded_bytes += res.get("bytes_discarded", 0) or 0
+                print(f"[FAILED] {name}")
+
+    # Summary + manifest
+    summary = {
+        "records": cfg.records,
+        "outdir": str(outdir),
+        "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
+        "counts": {
+            "total": len(results),
+            "ok": sum(1 for r in results if r["ok"]),
+            "skip_exists": sum(1 for r in results if r["status"] == "skip-exists"),
+            "bad_checksum": sum(1 for r in results if r["status"] == "bad-checksum"),
+            "failed": sum(1 for r in results if r["status"] == "failed"),
+        },
+        "bytes": {
+            "downloaded": downloaded_bytes,
+            "reused": reused_bytes,
+            "discarded": discarded_bytes,
+        },
+        "verify_md5": not cfg.no_check,
+        "max_redownloads": cfg.max_redownloads,
+        "net_retries": cfg.net_retries,
+        "flat": cfg.flat,
+    }
 
     manifest = {
-        "record_id": cfg.record_id,
-        "outdir": str(outdir),
-        "count": len(results),
+        "summary": summary,
         "results": results,
     }
     (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    print("\nSummary:")
+    print(
+        f"  OK: {summary['counts']['ok']} | SKIP-EXISTS: {summary['counts']['skip_exists']} | "
+        f"BAD-CHECKSUM: {summary['counts']['bad_checksum']} | FAILED: {summary['counts']['failed']}"
+    )
+    print(
+        f"  Downloaded: {summary['bytes']['downloaded'] / 1024 / 1024:.1f} MB | "
+        f"Reused: {summary['bytes']['reused'] / 1024 / 1024:.1f} MB | "
+        f"Discarded: {summary['bytes']['discarded'] / 1024 / 1024:.1f} MB"
+    )
     print(f"\nWrote manifest to {outdir / 'manifest.json'}")
-    return 0
+
+    return (
+        0
+        if (summary["counts"]["bad_checksum"] == 0 and summary["counts"]["failed"] == 0)
+        else 1
+    )
 
 
 if __name__ == "__main__":
