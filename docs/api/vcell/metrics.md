@@ -42,14 +42,6 @@ Functions
         ...
       }
 
-`pmean_scalar(x: jaxtyping.Float[Array, ''], *, axis_name: str = 'data') ‑> jaxtyping.Float[Array, '']`
-:   Average a scalar across devices (for pmap) via lax.pmean.
-    
-    Usage:
-      with jax.pmap(..., axis_name="data"):
-          local = batch_mae.mean()
-          global_mean = pmean_scalar(local, axis_name="data")
-
 Classes
 -------
 

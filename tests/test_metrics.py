@@ -2,16 +2,11 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.extra import numpy as np_st
 
 from vcell.metrics import RunningMean, compute_de, compute_mae, compute_pds
-
-# ===========================
-# MAE Tests
-# ===========================
 
 
 def test_mae_identity_perfect():
@@ -82,11 +77,6 @@ def test_mae_shape_broadcasting():
     assert jnp.allclose(mae, jnp.ones(5))
 
 
-# ===========================
-# PDS Tests
-# ===========================
-
-
 def test_pds_identity_perfect():
     """Test 1: Identity round-trip -> PDS = 1.0"""
     key = jax.random.key(42)
@@ -148,7 +138,7 @@ def test_pds_derangement():
 def test_pds_exclude_target_gene():
     """Test that PDS excludes target gene from distance calculation"""
     # Create simple test case where target gene matters
-    p, g = 3, 5
+    # 3 perturbations, 5 genes
     true = jnp.array([
         [1.0, 0.0, 0.0, 0.0, 0.0],  # Pert 1: only gene 0 is different
         [0.0, 1.0, 0.0, 0.0, 0.0],  # Pert 2: only gene 1 is different
@@ -202,11 +192,6 @@ def test_pds_topk_accuracy():
     assert pds_results["top1"] > 0.8
     assert pds_results["top5"] > 0.95
     assert pds_results["top10"] == 1.0  # All should be in top 10 with p=20
-
-
-# ===========================
-# DE Tests
-# ===========================
 
 
 def test_de_identity_perfect():
@@ -353,11 +338,6 @@ def test_de_truncation_rule():
     assert de_results.n_pred_sig > de_results.n_true_sig
 
 
-# ===========================
-# Integration Tests
-# ===========================
-
-
 def test_round_trip_all_metrics():
     """Test all metrics with identity predictions"""
     key = jax.random.key(42)
@@ -440,26 +420,12 @@ def test_normalization_consistency():
     assert jnp.mean(mae_mixed) > 1.0
 
 
-# ===========================
-# Running Mean Tests (already exist)
-# ===========================
-
-
 def test_runningmean_matches_global_mean():
     xs = jnp.array([0.0, 1.0, 2.0, 3.0])
     rm = RunningMean.zero()
     for v in xs:
         rm = rm.update(v)
     assert jnp.allclose(rm.compute(), jnp.mean(xs))
-
-
-# tests/test_metrics_property.py
-"""Property-based tests for metrics using Hypothesis."""
-
-
-# ===========================
-# Custom Strategies
-# ===========================
 
 
 @st.composite
@@ -540,11 +506,6 @@ def replicate_data(draw):
     return jnp.array(ctrl), jnp.array(pert)
 
 
-# ===========================
-# MAE Property Tests
-# ===========================
-
-
 @given(matching_arrays())
 @settings(max_examples=50, deadline=1000)
 def test_mae_identity_property(arrays):
@@ -618,9 +579,6 @@ def test_mae_mask_reduces_value_property(arr):
     pred = arr
     true = arr + jnp.ones_like(arr)  # Add constant difference
 
-    # Full MAE
-    mae_full = compute_mae(pred, true)
-
     # Create random mask (keep at least half the genes)
     key = jax.random.key(42)
     mask = jax.random.bernoulli(key, p=0.7, shape=arr.shape).astype(jnp.float32)
@@ -628,14 +586,8 @@ def test_mae_mask_reduces_value_property(arr):
     # Masked MAE
     mae_masked = compute_mae(pred, true, mask=mask)
 
-    # MAE should be similar or smaller when masking constant differences
-    # (This isn't strictly true for all cases, but is a reasonable property)
+    # MAE should be non-negative (basic sanity check)
     assert jnp.all(mae_masked >= 0)
-
-
-# ===========================
-# Running Mean Property Tests
-# ===========================
 
 
 @given(
@@ -720,12 +672,6 @@ def test_running_mean_order_invariant_property(values):
     assert jnp.allclose(rm1.compute(), rm2.compute(), rtol=1e-5, atol=1e-6)
 
 
-# ===========================
-# PDS Property Tests (when implemented)
-# ===========================
-
-
-@pytest.mark.skip(reason="compute_pds not implemented yet")
 @given(pseudobulk_data())
 @settings(max_examples=20, deadline=2000)
 def test_pds_identity_is_perfect_property(data):
@@ -735,7 +681,6 @@ def test_pds_identity_is_perfect_property(data):
     assert pds_results["mean_inv_rank"] == 1.0
 
 
-@pytest.mark.skip(reason="compute_pds not implemented yet")
 @given(pseudobulk_data())
 @settings(max_examples=20, deadline=2000)
 def test_pds_bounded_property(data):
@@ -754,7 +699,6 @@ def test_pds_bounded_property(data):
             assert 0 <= pds_results[f"top{k}"] <= 1
 
 
-@pytest.mark.skip(reason="compute_pds not implemented yet")
 @given(pseudobulk_data())
 @settings(max_examples=20, deadline=2000)
 def test_pds_topk_monotonic_property(data):
@@ -771,12 +715,6 @@ def test_pds_topk_monotonic_property(data):
     assert pds_results["top5"] <= pds_results["top10"]
 
 
-# ===========================
-# DE Property Tests (when implemented)
-# ===========================
-
-
-@pytest.mark.skip(reason="compute_de not implemented yet")
 @given(replicate_data())
 @settings(max_examples=20, deadline=2000)
 def test_de_identity_is_perfect_property(data):
@@ -789,7 +727,6 @@ def test_de_identity_is_perfect_property(data):
     assert de_results.n_pred_sig == de_results.n_true_sig
 
 
-@pytest.mark.skip(reason="compute_de not implemented yet")
 @given(replicate_data())
 @settings(max_examples=20, deadline=2000)
 def test_de_no_effect_gives_zero_property(data):
@@ -804,7 +741,6 @@ def test_de_no_effect_gives_zero_property(data):
     assert de_results.overlap == 0.0
 
 
-@pytest.mark.skip(reason="compute_de not implemented yet")
 @given(replicate_data(), st.floats(min_value=0.001, max_value=0.1))
 @settings(max_examples=20, deadline=2000)
 def test_de_fdr_threshold_property(data, fdr):
@@ -817,11 +753,6 @@ def test_de_fdr_threshold_property(data, fdr):
     # Stricter FDR should identify fewer or equal genes
     assert de_strict.n_true_sig <= de_loose.n_true_sig
     assert de_strict.n_pred_sig <= de_loose.n_pred_sig
-
-
-# ===========================
-# Cross-metric Properties
-# ===========================
 
 
 @given(matching_arrays())

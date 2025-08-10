@@ -462,23 +462,10 @@ import typing as tp
 
 import beartype
 import equinox as eqx
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, jaxtyped
 
-__all__ = [
-    "DEDetails",
-    "RunningMean",
-    "compute_mae",
-    "compute_pds",
-    "compute_de",
-    "pmean_scalar",
-]
-
-
-# -------------------------
-# Result containers (eqx.Module)
-# -------------------------
+__all__ = ["DEDetails", "RunningMean", "compute_mae", "compute_pds", "compute_de"]
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -490,11 +477,6 @@ class DEDetails(eqx.Module):
     spearman_r: float  # rank corr of (signed) logFC
     n_true_sig: int
     n_pred_sig: int
-
-
-# -------------------------
-# Tiny in-loop helper for streaming scalars
-# -------------------------
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -531,11 +513,6 @@ class RunningMean(eqx.Module):
     def compute(self) -> Float[Array, ""]:
         # Returns NaN if count==0; caller should guard or accept NaN to signal "empty".
         return self.total / self.count
-
-
-# -------------------------
-# Pure metric functions (can be called outside jit; gather first if distributed)
-# -------------------------
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -616,21 +593,4 @@ def compute_de(
     raise NotImplementedError(
         "compute_de is a skeleton; implement DE test, BH-FDR, and comparisons."
     )
-
-
-# -------------------------
-# Distributed convenience
-# -------------------------
-
-
-@jaxtyped(typechecker=beartype.beartype)
-def pmean_scalar(x: Float[Array, ""], *, axis_name: str = "data") -> Float[Array, ""]:
-    """Average a scalar across devices (for pmap) via lax.pmean.
-
-    Usage:
-      with jax.pmap(..., axis_name="data"):
-          local = batch_mae.mean()
-          global_mean = pmean_scalar(local, axis_name="data")
-    """
-    return jax.lax.pmean(x, axis_name)
 
