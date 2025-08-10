@@ -105,3 +105,15 @@ There's no point in writing a beautiful multiprocess'ed dataloader if the naive 
 
 I tried making a naive dataloader for the replogle data to recreate the STATE training.
 I don't know how successful I was.
+
+# 08/09/2025
+
+```sh
+gcloud compute tpus tpu-vm create tpu-2 --project trc-project-466816 --zone us-central1-f --accelerator-type v2-8 --version tpu-ubuntu2204-base
+```
+
+I picked out the various options here:
+
+![Image of my google cloud account, showing that my project trc-project has ID trc-project-466816]()
+
+![Image of my email from TRC, showing that I have access to `v2-8` TPU VMs in `us-central1-f`]()

@@ -1,0 +1,114 @@
+Module vcell.metrics
+====================
+
+Functions
+---------
+
+`compute_de(pred_pert: jaxtyping.Float[Array, 'r g'], pred_ctrl: jaxtyping.Float[Array, 'r g'], true_pert: jaxtyping.Float[Array, 'r g'], true_ctrl: jaxtyping.Float[Array, 'r g'], *, fdr: float = 0.05, test: Literal['wilcoxon'] = 'wilcoxon', two_sided: bool = True) ‑> vcell.metrics.DEDetails`
+:   Differential-expression agreement (skeleton).
+    
+    Intent:
+      1) Make DE calls (pred vs ctrl) and (true vs ctrl) with the same test+FDR.
+      2) Compare sets/ranks: overlap (e.g., Jaccard/F1), PR-AUC, Spearman on |logFC| or signed logFC.
+    
+    Notes:
+      - Callers should pass consistent normalisation/gene order.
+      - r = number of 'replicates' per condition (can be 1 if using pseudobulks).
+    
+    Returns:
+      DEDetails(overlap=..., pr_auc=..., spearman_r=..., n_true_sig=..., n_pred_sig=...)
+
+`compute_mae(pred: jaxtyping.Float[Array, '... g'], true: jaxtyping.Float[Array, '... g'], *, mask: jaxtyping.Float[Array, '... g'] | None = None) ‑> jaxtyping.Float[Array, '...']`
+:   Per-example MAE across genes. Reduces over the last (gene) axis only.
+    
+    Shapes:
+      pred, true: [..., g]
+      mask (optional): same shape; 1.0 keeps a gene, 0.0 drops it.
+    Returns:
+      mae: [...]  (one scalar per leading example/perturbation index)
+
+`compute_pds(pred_by_pert: jaxtyping.Float[Array, 'p g'], true_by_pert: jaxtyping.Float[Array, 'p g'], *, distance: Literal['cosine', 'euclidean'] = 'cosine', topk: tuple[int, ...] = (1, 5, 10)) ‑> dict[str, float]`
+:   Perturbation Discrimination Score (skeleton).
+    
+    Intent:
+      For each perturbation i, rank true profiles by distance to pred[i].
+      Report mean inverse rank and top-k accuracy.
+    
+    Returns:
+      {
+        "mean_inv_rank": float,
+        "top1": float,
+        "top5": float,
+        ...
+      }
+
+`pmean_scalar(x: jaxtyping.Float[Array, ''], *, axis_name: str = 'data') ‑> jaxtyping.Float[Array, '']`
+:   Average a scalar across devices (for pmap) via lax.pmean.
+    
+    Usage:
+      with jax.pmap(..., axis_name="data"):
+          local = batch_mae.mean()
+          global_mean = pmean_scalar(local, axis_name="data")
+
+Classes
+-------
+
+`DEDetails(overlap: float, pr_auc: float, spearman_r: float, n_true_sig: int, n_pred_sig: int)`
+:   Immutable-ish result packet for DE agreement metrics.
+
+    ### Ancestors (in MRO)
+
+    * equinox._module._module.Module
+    * collections.abc.Hashable
+
+    ### Instance variables
+
+    `n_pred_sig: int`
+    :
+
+    `n_true_sig: int`
+    :
+
+    `overlap: float`
+    :
+
+    `pr_auc: float`
+    :
+
+    `spearman_r: float`
+    :
+
+`RunningMean(total: jaxtyping.Float[Array, ''], count: jaxtyping.Float[Array, ''])`
+:   Numerically stable running mean of scalar values.
+    
+    Note: prefer returning a *new* instance rather than in-place mutation
+    to keep things functional/JAX-friendly.
+
+    ### Ancestors (in MRO)
+
+    * equinox._module._module.Module
+    * collections.abc.Hashable
+
+    ### Static methods
+
+    `zero() ‑> vcell.metrics.RunningMean`
+    :
+
+    ### Instance variables
+
+    `count: jaxtyping.Float[Array, '']`
+    :
+
+    `total: jaxtyping.Float[Array, '']`
+    :
+
+    ### Methods
+
+    `compute(self) ‑> jaxtyping.Float[Array, '']`
+    :
+
+    `merge(self, other: RunningMean) ‑> vcell.metrics.RunningMean`
+    :
+
+    `update(self, value: jaxtyping.Float[Array, ''], weight: jaxtyping.Float[Array, ''] | int = 1) ‑> vcell.metrics.RunningMean`
+    :
