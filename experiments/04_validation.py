@@ -1,14 +1,9 @@
 # experiments/04_validation.py
 """
 An experiment to get validation predictions from an arbitrary neural network.
-
-Questions I had before this experiment:
-
-1. How should we make predictions? The same (batch of control cells, perturbation) -> (batch of perturbed cells)? And do I just do that over and over again until I have a distribution? Or is there a better way to sample from the model?
 """
 
 import dataclasses
-import json
 import logging
 import os
 import pathlib
@@ -28,7 +23,7 @@ from vcell import helpers
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
-logger = logging.getLogger("03")
+logger = logging.getLogger("04")
 
 
 @beartype.beartype
@@ -118,14 +113,6 @@ class Model(eqx.Module):
         delta_sg = jax.vmap(self.out_proj)(m_sd)
         y = x_sg + delta_sg
         return y
-
-
-@beartype.beartype
-def save(filename: str, cfg: Config, model):
-    with open(filename, "wb") as fd:
-        cfg_str = json.dumps(cfg)
-        fd.write((cfg_str + "\n").encode("utf-8"))
-        eqx.tree_serialise_leaves(fd, model)
 
 
 @beartype.beartype
