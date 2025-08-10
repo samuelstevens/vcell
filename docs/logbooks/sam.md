@@ -121,19 +121,33 @@ I picked out the various options here:
 
 # 08/10/2025
 
-1. Finish `tools/submit_vcc.py`.
-2. Run `experiments/04_validation.py` to create `pred_raw.h5ad` (memmap path works).
-3. Generate `genes.txt` from `adata_Training.h5ad` and run `cell-eval prep` via `just submit`.
-4. Upload the prepped file on the Evaluation page (<=100k cells, includes controls).
-5. Implement metrics to satisfy tests:
+# What I got done
+
+* Wrote unit + property tests for metrics (identity, control baseline, derangement, gene-order trap).
+* Built a tiny deterministic Equinox model that mixes tokens via pooled context.
+* Implemented streaming inference with a memmap to avoid 7 GB RAM spikes; generated `pred_raw.h5ad`.
+* Set up deterministic control pooling and consistent log1p gene space for predictions.
+* Wrote `tools/submit_vcc.py`.
+
+# Challenges
+
+* Uploads are slow: 1.1 MB/s aligns with a 10 Mb/s uplink; full 100k files take 1 hour.
+* Unseen validation perturbations mean learned ID embeddings don’t help; training won’t move PDS/DE much without metadata features.
+* Potential variance from changing control sets; fixed by seeding and reusing a canonical pool.
+
+# What’s next
+
+1. Submit a .vcc file (waiting on upload).
+2. Record scores; verify basic expectations (MAE magnitude, no schema errors).
+3. Add a tiny local "fake val" harness from training to sanity-check metrics end-to-end.
+4. Implement metrics to satisfy tests:
     * `compute_pds` (L1 distance, exclude target gene, normalized inverse rank, top-k)
     * `compute_de` (Wilcoxon rank-sum, BH FDR at 0.05, overlap; optional PR-AUC, Spearman)
-6. Train the same model on H1 train:
+5. Train the same model on H1 train:
     * control set → predicted cells
     * still use OOV=0 for unseen val IDs
     * compare to random init via your local metrics
-7. Add a "fixed pseudobulk" mode: predict and then average per-perturbation to reduce variance; measure MAE vs per-cell.
-
+6. Add a "fixed pseudobulk" mode: predict and then average per-perturbation to reduce variance; measure MAE vs per-cell.
 
 Other stuff
 
@@ -141,4 +155,3 @@ Other stuff
 -Explore using metadata embeddings (target-gene features) so val IDs aren’t blind.
 -Wire scPerturb (CRISPR-only) loaders and alignment to VCC genes (zero-fill missing genes), then fine-tune.
 -SAE-on-residuals idea: cache ST residuals and train an SAE for interpretability; design a small eval (e.g., residual attribution to DE genes).
-
