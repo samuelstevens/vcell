@@ -1,8 +1,54 @@
 >>>> AGENTS.md
-See /CONTRIBUTING.md for guidelines on codestyle.
+- Use `uv run SCRIPT.py` or `uv run python ARGS` to run python instead of Just plain `python`.
+- After making edits, run `uvx ruff format --preview .` to format the file, then run `uvx ruff check --fix .` to lint, then run `uvx ty check FILEPATH` to type check (`ty` is prerelease software, and typechecking often will have false positives). Only do this if you think you're finished, or if you can't figure out a bug. Maybe linting will make it obvious. Don't fix linting or typing errors in files you haven't modified.
+- Don't hard-wrap comments. Only use linebreaks for new paragraphs. Let the editor soft wrap content.
+- Prefer negative if statements in combination with early returns/continues. Rather than nesting multiple positive if statements, just check if a condition is False, then return/continue in a loop. This reduces indentation.
+- This project uses Python 3.12. You can use `dict`, `list`, `tuple` instead of the imports from `typing`. You can use `| None` instead of `Optional`.
+- Use single-backticks for variables. We use Markdown and [pdoc3](https://pdoc3.github.io/pdoc/) for docs rather than ReST and Sphinx.
+- File descriptors from `open()` are called `fd`.
+- Use types where possible, including `jaxtyping` hints.
+- Decorate functions with `beartype.beartype` unless they use a `jaxtyping` hint, in which case use `jaxtyped(typechecker=beartype.beartype)`.
+- Variables referring to a absolute filepath should be suffixed with `_fpath`. Filenames are `_fname`. Directories are `_dpath`.
+- Prefer `make` over `build` when naming functions that construct objects, and use `get` when constructing primitives (like string paths or config values).
+- Only use `setup` for naming functions that don't return anything.
+
+- You can use `gh` to access issues and PRs on GitHub to gather more context. We use GitHub issues a lot to share ideas and communicate about problems, so you should almost always check to see if there's a relevant GitHub issue for whatever you're working on.
+
+# Tensor Variables
+
+Throughout the code, variables are annotated with shape suffixes, as [recommended by Noam Shazeer](https://medium.com/@NoamShazeer/shape-suffixes-good-coding-style-f836e72e24fd).
+The key for these suffixes:
+
+- b: batch size
+- d: model dimension
+
+For example, an batched activation tensor with shape (batch, d_model) is `x_bd`.
 
 >>>> CLAUDE.md
-See /CONTRIBUTING.md for guidelines on codestyle.
+- Use `uv run SCRIPT.py` or `uv run python ARGS` to run python instead of Just plain `python`.
+- After making edits, run `uvx ruff format --preview .` to format the file, then run `uvx ruff check --fix .` to lint, then run `uvx ty check FILEPATH` to type check (`ty` is prerelease software, and typechecking often will have false positives). Only do this if you think you're finished, or if you can't figure out a bug. Maybe linting will make it obvious. Don't fix linting or typing errors in files you haven't modified.
+- Don't hard-wrap comments. Only use linebreaks for new paragraphs. Let the editor soft wrap content.
+- Prefer negative if statements in combination with early returns/continues. Rather than nesting multiple positive if statements, just check if a condition is False, then return/continue in a loop. This reduces indentation.
+- This project uses Python 3.12. You can use `dict`, `list`, `tuple` instead of the imports from `typing`. You can use `| None` instead of `Optional`.
+- Use single-backticks for variables. We use Markdown and [pdoc3](https://pdoc3.github.io/pdoc/) for docs rather than ReST and Sphinx.
+- File descriptors from `open()` are called `fd`.
+- Use types where possible, including `jaxtyping` hints.
+- Decorate functions with `beartype.beartype` unless they use a `jaxtyping` hint, in which case use `jaxtyped(typechecker=beartype.beartype)`.
+- Variables referring to a absolute filepath should be suffixed with `_fpath`. Filenames are `_fname`. Directories are `_dpath`.
+- Prefer `make` over `build` when naming functions that construct objects, and use `get` when constructing primitives (like string paths or config values).
+- Only use `setup` for naming functions that don't return anything.
+
+- You can use `gh` to access issues and PRs on GitHub to gather more context. We use GitHub issues a lot to share ideas and communicate about problems, so you should almost always check to see if there's a relevant GitHub issue for whatever you're working on.
+
+# Tensor Variables
+
+Throughout the code, variables are annotated with shape suffixes, as [recommended by Noam Shazeer](https://medium.com/@NoamShazeer/shape-suffixes-good-coding-style-f836e72e24fd).
+The key for these suffixes:
+
+- b: batch size
+- d: model dimension
+
+For example, an batched activation tensor with shape (batch, d_model) is `x_bd`.
 
 >>>> CONTRIBUTING.md
 # Contributing
@@ -64,6 +110,10 @@ To install, clone this repository (via SSH is probably easier, but you do you).
 In the project root directory, run `uv run experiments/00_mean_baseline.py`.
 The first invocation should create a virtual environment.
 
+## Getting Started
+
+1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](docs/api/vcell/).
+
 ## Setup
 
 **Editor:**
@@ -99,9 +149,6 @@ You need to make an account on [https://virtualcellchallenge.org](https://virtua
 The data provided by the challenge is 15GB.
 
 Data should be extracted to the root project folder. Final structure will look like: `/vcell/data/vcc_data`.
-## Baseline
-
-
 
 ## Docs
 
@@ -127,6 +174,9 @@ It is a runtime alternative to MyPy for when you have some objects typed `any` t
 Please decorate every function with it.
 
 >>>> __init__.py
+"""
+.. include:: install-gcloud.md
+"""
 
 >>>> data/__init__.py
 from .naive_dataloader import Config as PerturbationConfig
@@ -455,6 +505,68 @@ def current_git_commit() -> str | None:
         return result.stdout.strip() or None
     except (FileNotFoundError, subprocess.CalledProcessError):
         return None
+
+>>>> install-gcloud.md
+## Install `gcloud`
+
+I installed `gcloud` without messing up my `$PATH` via `pip install -g` or any of that crap.
+Here's how.
+
+Pick the right package from https://cloud.google.com/sdk/docs/install.
+
+I clicked the macOS tab and then chose the macOS 64-bit Apple Silicon option: https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-arm.tar.gz
+
+I downloaded and extracted this to whatever directory you want.
+
+```
+$ pwd
+/Users/samstevens/Development/vcell
+$ wget https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-arm.tar.gz
+--2025-08-15 09:51:22--  https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-arm.tar.gz
+Resolving dl.google.com (dl.google.com)... 74.125.21.91, 74.125.21.190, 74.125.21.136, ...
+Connecting to dl.google.com (dl.google.com)|74.125.21.91|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 56538937 (54M) [application/gzip]
+Saving to: ‘google-cloud-cli-darwin-arm.tar.gz’
+
+google-cloud-cli-darwin-arm.tar.gz              100%[====================================================================================================>]  53.92M  31.4MB/s    in 1.7s
+
+2025-08-15 09:51:24 (31.4 MB/s) - ‘google-cloud-cli-darwin-arm.tar.gz’ saved [56538937/56538937]
+$ ls
+google-cloud-cli-darwin-arm.tar.gz
+$ tar -xzf google-cloud-cli-darwin-arm.tar.gz  # -x extract -z use gzip -f filepath
+$ ls
+google-cloud-cli-darwin-arm.tar.gz  google-cloud-sdk/
+```
+Now you have some options on what to do.
+
+I store all these crappy non-pip tools in `~/.local/pkg`
+
+```
+$ mv google-cloud-sdk ~/.local/pkg
+$ ls ~/.local/pkg
+aws-cli/  google-cloud-sdk/
+```
+
+Then I add the `bin/` to my path.
+I use fish, so it's just `fish_add_path ~/.local/pkg/google-cloud-sdk/bin`.
+If you use a different shell, then do whatever you do to add `~/.local/pkg/google-cloud-sdk/bin` to your path.
+
+Then you can run:
+
+```
+$ gcloud version
+Google Cloud SDK 533.0.0
+bq 2.1.22
+core 2025.08.01
+gcloud-crc32c 1.0.0
+gsutil 5.35
+Updates are available for some Google Cloud CLI components.  To install them,
+please run:
+  $ gcloud components update
+```
+
+Now you have gcloud installed in a way that is easy to delete!
 
 >>>> metrics.py
 # src/vcell/metrics.py

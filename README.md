@@ -9,6 +9,10 @@ To install, clone this repository (via SSH is probably easier, but you do you).
 In the project root directory, run `uv run experiments/00_mean_baseline.py`.
 The first invocation should create a virtual environment.
 
+## Getting Started
+
+1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](docs/api/vcell/).
+
 ## Setup
 
 **Editor:**

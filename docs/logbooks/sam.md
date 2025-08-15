@@ -118,6 +118,10 @@ I picked out the various options here:
 
 ![Image of my email from TRC, showing that I have access to `v2-8` TPU VMs in `us-central1-f`]()
 
+```sh
+gcloud compute tpus tpu-vm ssh tpu-2 --project trc-project-466816 --zone us-central1-f
+```
+
 
 # 08/10/2025
 
@@ -137,7 +141,7 @@ I picked out the various options here:
 
 # What’s next
 
-1. Submit a .vcc file (waiting on upload).
+1. Submit a .vcc file.
 2. Record scores; verify basic expectations (MAE magnitude, no schema errors).
 3. Add a tiny local "fake val" harness from training to sanity-check metrics end-to-end.
 4. Implement metrics to satisfy tests:
@@ -155,3 +159,15 @@ Other stuff
 -Explore using metadata embeddings (target-gene features) so val IDs aren’t blind.
 -Wire scPerturb (CRISPR-only) loaders and alignment to VCC genes (zero-fill missing genes), then fine-tune.
 -SAE-on-residuals idea: cache ST residuals and train an SAE for interpretability; design a small eval (e.g., residual attribution to DE genes).
+
+
+# 08/13/2025
+
+Maciej is looking for some guidance on the Jax-based metrics.
+He "doesn't even know where to start".
+I think we need to provide some very high-level context. It should be simple, concise and intuitive.
+
+# 08/15/2025
+
+Great news! I think we have a complete process of training and evaluating a model!
+

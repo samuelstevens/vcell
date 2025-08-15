@@ -1,5 +1,3 @@
-Module vcell
-============
 ## Install `gcloud`
 
 I installed `gcloud` without messing up my `$PATH` via `pip install -g` or any of that crap.
@@ -60,9 +58,3 @@ please run:
 ```
 
 Now you have gcloud installed in a way that is easy to delete!
-
-Sub-modules
------------
-* vcell.data
-* vcell.helpers
-* vcell.metrics
