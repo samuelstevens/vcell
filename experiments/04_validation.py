@@ -2,18 +2,17 @@
 """
 An experiment to get validation predictions from an arbitrary neural network.
 
-Key change: stream predictions into a float32 on-disk memmap to avoid holding
-~7GB in RAM. Peak RAM is ~one perturbation's chunk (e.g., ~140MB) + overhead.
+Key change: stream predictions into a float32 on-disk memmap to avoid holding ~7GB in RAM. Peak RAM is ~one perturbation's chunk (e.g., ~140MB) + overhead.
 """
 
 import dataclasses
-import json
 import logging
 import os
 import pathlib
 
 import anndata as ad
 import beartype
+import chex
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -66,7 +65,7 @@ class Model(eqx.Module):
     d: int
     n_perts: int
 
-    def __init__(self, n_perts: int, g: int, d: int, key: Array):
+    def __init__(self, n_perts: int, g: int, d: int, key: chex.PRNGKey):
         k1, k2, k3, k4, k5, k6 = jax.random.split(key, 6)
         self.in_proj = eqx.nn.Linear(in_features=g, out_features=d, key=k1)
         self.h_proj = eqx.nn.Linear(in_features=d, out_features=d, key=k2)
@@ -93,14 +92,6 @@ class Model(eqx.Module):
         m_sd = jax.nn.gelu(jax.vmap(self.h_proj)(h_sd) + ctx_sd + pert_emb_sd)
         delta_sg = jax.vmap(self.out_proj)(m_sd)
         return x_sg + delta_sg
-
-
-@beartype.beartype
-def save(filename: str, cfg: Config, model):
-    with open(filename, "wb") as fd:
-        cfg_str = json.dumps(dataclasses.asdict(cfg))
-        fd.write((cfg_str + "\n").encode("utf-8"))
-        eqx.tree_serialise_leaves(fd, model)
 
 
 @beartype.beartype
