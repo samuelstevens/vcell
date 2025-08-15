@@ -1,4 +1,5 @@
 # experiments/01_mlp.py
+# ruff: noqa
 """
 Uses a simple embedding to predict a transcriptome from a perturbation.
 
