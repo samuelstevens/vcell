@@ -2,6 +2,11 @@
 
 A simple guide to installing the `gcloud` binary so that it can be easily uninstalled.
 
+1. Download and extract the package.
+2. Move it somewhere useful.
+3. Add the directory to your $PATH.
+4. Login to Google Cloud.
+
 Download the right package from https://cloud.google.com/sdk/docs/install for your computer.
 
 <details>
@@ -61,3 +66,4 @@ please run:
 ```
 
 Now you have gcloud installed in a way that is easy to delete!
+You need to run `gcloud auth login` and login with your google account.
