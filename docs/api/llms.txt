@@ -112,7 +112,9 @@ The first invocation should create a virtual environment.
 
 ## Getting Started
 
-1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](docs/api/vcell/).
+1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](src/vcell/install-gcloud.md).
+2. [Make a TPU VM.](src/vcell/make-a-tpu-vm.md)
+3. 
 
 ## Setup
 
@@ -509,14 +511,18 @@ def current_git_commit() -> str | None:
 >>>> install-gcloud.md
 ## Install `gcloud`
 
-I installed `gcloud` without messing up my `$PATH` via `pip install -g` or any of that crap.
-Here's how.
+A simple guide to installing the `gcloud` binary so that it can be easily uninstalled.
 
-Pick the right package from https://cloud.google.com/sdk/docs/install.
+Download the right package from https://cloud.google.com/sdk/docs/install for your computer.
+
+<details>
+<summary>My Choice</summary>
 
 I clicked the macOS tab and then chose the macOS 64-bit Apple Silicon option: https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-arm.tar.gz
 
-I downloaded and extracted this to whatever directory you want.
+You can download and extract this to whatever directory you want. We will move it.
+
+</details>
 
 ```
 $ pwd
@@ -538,9 +544,8 @@ $ tar -xzf google-cloud-cli-darwin-arm.tar.gz  # -x extract -z use gzip -f filep
 $ ls
 google-cloud-cli-darwin-arm.tar.gz  google-cloud-sdk/
 ```
-Now you have some options on what to do.
 
-I store all these crappy non-pip tools in `~/.local/pkg`
+I store all these crappy non-pip tools in `~/.local/pkg`. You can put it wherever you want because we will eventually add it to our `$PATH`.
 
 ```
 $ mv google-cloud-sdk ~/.local/pkg
@@ -567,6 +572,19 @@ please run:
 ```
 
 Now you have gcloud installed in a way that is easy to delete!
+
+>>>> make-a-tpu-vm.md
+## Make a TPU VM
+
+TL;DR:
+
+```sh
+gcloud compute tpus tpu-vm create $NAME --project $PROJECT_ID --zone $ZONE --accelerator-type $TPU_VERSION --version $IMAGE
+```
+
+![Image of my google cloud account, showing that my project trc-project has ID trc-project-466816](/docs/assets/console.jpg)
+
+![Image of my email from TRC, showing that I have access to `v2-8` TPU VMs in `us-central1-f`](/docs/assets/tpu-email.jpg)
 
 >>>> metrics.py
 # src/vcell/metrics.py
