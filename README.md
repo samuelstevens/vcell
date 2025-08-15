@@ -11,7 +11,9 @@ The first invocation should create a virtual environment.
 
 ## Getting Started
 
-1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](docs/api/vcell/).
+1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](src/vcell/install-gcloud.md).
+2. [Make a TPU VM.](src/vcell/make-a-tpu-vm.md)
+3. 
 
 ## Setup
 

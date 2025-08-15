@@ -1,13 +1,17 @@
 ## Install `gcloud`
 
-I installed `gcloud` without messing up my `$PATH` via `pip install -g` or any of that crap.
-Here's how.
+A simple guide to installing the `gcloud` binary so that it can be easily uninstalled.
 
-Pick the right package from https://cloud.google.com/sdk/docs/install.
+Download the right package from https://cloud.google.com/sdk/docs/install for your computer.
+
+<details>
+<summary>My Choice</summary>
 
 I clicked the macOS tab and then chose the macOS 64-bit Apple Silicon option: https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-arm.tar.gz
 
-I downloaded and extracted this to whatever directory you want.
+You can download and extract this to whatever directory you want. We will move it.
+
+</details>
 
 ```
 $ pwd
@@ -29,9 +33,8 @@ $ tar -xzf google-cloud-cli-darwin-arm.tar.gz  # -x extract -z use gzip -f filep
 $ ls
 google-cloud-cli-darwin-arm.tar.gz  google-cloud-sdk/
 ```
-Now you have some options on what to do.
 
-I store all these crappy non-pip tools in `~/.local/pkg`
+I store all these crappy non-pip tools in `~/.local/pkg`. You can put it wherever you want because we will eventually add it to our `$PATH`.
 
 ```
 $ mv google-cloud-sdk ~/.local/pkg
