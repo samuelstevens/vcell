@@ -68,7 +68,7 @@ please run:
 ```
 
 Now you have gcloud installed in a way that is easy to delete!
-You need to run `gcloud auth login` and login with your google account.
+You need to run `glcoud init` and (maybe) `gcloud auth login` and login with your google account.
 
 ## Make a TPU VM
 
