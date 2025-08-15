@@ -51,7 +51,7 @@ class Config:
     """Maximum gradient norm."""
     batch_size: int = 128
     """Batch size."""
-    n_epochs: int = 3
+    n_train: int = 1_000
 
     # Logging
     log_every: int = 10
@@ -213,19 +213,17 @@ def main(cfg: Config):
 
     # Train
     global_step = 0
-    for epoch in range(cfg.n_epochs):
-        for b, batch in enumerate(dataloader):
-            breakpoint()
+    for b, batch in enumerate(dataloader):
+        model, state, loss = step_model(
+            model, optim, state, batch["control"], batch["pert"], batch["target"]
+        )
+        global_step += 1
 
-            model, state, loss = step_model(
-                model, optim, state, batch["control"], batch["pert"], batch["target"]
-            )
-            global_step += 1
+        if global_step % cfg.log_every == 0:
+            logger.info("step: %d, loss: %.5f", global_step, loss.item())
 
-            if global_step % cfg.log_every == 0:
-                logger.info(
-                    "epoch: %d, step: %d, loss: %.5f", epoch, global_step, loss.item()
-                )
+        if b > cfg.n_train:
+            break
 
     # Prepare on-disk memmap
     mm_path = os.path.join(cfg.ckpt_dir, "pred_X.float32.mm")
