@@ -12,8 +12,13 @@ The first invocation should create a virtual environment.
 ## Getting Started
 
 1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](src/vcell/install-gcloud.md).
-2. [Make a TPU VM.](src/vcell/make-a-tpu-vm.md)
-3. 
+2. [Make a TPU VM](src/vcell/make-a-tpu-vm.md).
+3. Clone this repo onto your TPU VM.
+4. [Sync the input data to the TPU VM](src/vcell/tpu-tricks.md).
+5. Run training.
+6. [Sync the outputs to your local machine](src/vcell/tpu-tricks.md).
+7. Run `uv run scripts/submit_vcc.py --pred pred_raw.h5ad`.
+8. Submit `pred_raw.prep.vcc` to the leaderboard.
 
 ## Setup
 
