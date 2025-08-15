@@ -24,6 +24,7 @@ import polars as pl
 import tyro
 from jaxtyping import Array, Float, Int, jaxtyped
 
+import vcell.data
 from vcell import helpers
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
@@ -39,6 +40,18 @@ class Config:
 
     vcc: pathlib.Path = pathlib.Path("data/inputs/vcc")
     """Path to vcc challenge data."""
+
+    data: vcell.data.PerturbationConfig = vcell.data.PerturbationConfig(
+        pathlib.Path("data/inputs/vcc/adata_Training.h5ad"), cell_line_col="guide_id"
+    )
+
+    learning_rate: float = 1e-4
+    """Learning rate."""
+    grad_clip: float = 1.0
+    """Maximum gradient norm."""
+    batch_size: int = 128
+    """Batch size."""
+    n_epochs: int = 3
 
     # Logging
     log_every: int = 10
@@ -128,6 +141,27 @@ def step_model(
 
 
 @beartype.beartype
+class Batcher:
+    def __init__(self, dataloader, batch_size: int):
+        self.dataloader = dataloader
+        self.batch_size = batch_size
+
+    def __iter__(self):
+        while True:
+            batch = []
+            it = iter(self.dataloader)
+            while len(batch) < self.batch_size:
+                batch.append(next(it))
+
+            # Transform list of dicts into dict of arrays
+            batch_dict = {}
+            for key in batch[0].keys():
+                batch_dict[key] = jnp.array([item[key] for item in batch])
+
+            yield batch_dict
+
+
+@beartype.beartype
 def main(cfg: Config):
     key = jax.random.key(seed=cfg.seed)
 
@@ -166,12 +200,7 @@ def main(cfg: Config):
     key, model_key = jax.random.split(key)
     model = Model(n_perts=1 + len(train_gene_ids), g=g, d=64, key=model_key)
     model = eqx.tree_at(lambda m: m.pert_table, model, model.pert_table.at[0].set(0.0))
-    optim = optax.adamw(
-        learning_rate=cfg.learning_rate,
-        b1=cfg.beta1,
-        b2=cfg.beta2,
-        weight_decay=cfg.weight_decay,
-    )
+    optim = optax.sgd(learning_rate=cfg.learning_rate)
 
     if cfg.grad_clip > 0:
         optim = optax.chain(optim, optax.clip_by_global_norm(cfg.grad_clip))
@@ -179,15 +208,18 @@ def main(cfg: Config):
     state = optim.init(eqx.filter([model], eqx.is_inexact_array))
     logger.info("Initialized optimizer.")
 
+    dataloader = vcell.data.PerturbationDataloader(cfg.data)
+    dataloader = Batcher(dataloader, cfg.batch_size)
+
     # Train
-    breakpoint()
     global_step = 0
-
     for epoch in range(cfg.n_epochs):
-        for b, (ctrls, perts, tgts) in enumerate(dataloader):
-            key, *subkeys = jax.random.split(key, num=cfg.batch_size + 1)
+        for b, batch in enumerate(dataloader):
+            breakpoint()
 
-            model, state, loss = step_model(model, optim, state, ctrls, perts, tgts)
+            model, state, loss = step_model(
+                model, optim, state, batch["control"], batch["pert"], batch["target"]
+            )
             global_step += 1
 
             if global_step % cfg.log_every == 0:
