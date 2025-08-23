@@ -19,6 +19,7 @@ dependencies = [
     "requests>=2.32.4",
     "scanpy>=1.11.3",
     "tyro>=0.9.26",
+    "wandb>=0.21.1",
 ]
 
 [build-system]

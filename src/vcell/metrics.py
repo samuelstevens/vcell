@@ -85,12 +85,11 @@ def compute_mae(
 
 @jaxtyped(typechecker=beartype.beartype)
 def compute_pds(
-    pred_by_pert: Float[Array, "p g"],
-    true_by_pert: Float[Array, "p g"],
+    pred: Float[Array, "p g"],
+    true: Float[Array, "p g"],
     *,
-    distance: tp.Literal["cosine", "euclidean"] = "cosine",
     topk: tuple[int, ...] = (1, 5, 10),
-) -> dict[str, float]:
+) -> dict[str, Float[Array, ""]]:
     """Perturbation Discrimination Score (skeleton).
 
     Intent:
@@ -98,16 +97,36 @@ def compute_pds(
       Report mean inverse rank and top-k accuracy.
 
     Returns:
-      {
-        "mean_inv_rank": float,
-        "top1": float,
-        "top5": float,
-        ...
-      }
+        {
+            "mean_inv_rank": float,
+            "top1": float,
+            "top5": float,
+            ...
+        }
     """
-    raise NotImplementedError(
-        "compute_pds is a skeleton; implement ranking + reductions."
-    )
+    p, g = pred.shape
+    if p == 0:
+        raise ValueError("p (number of perturbations) must be > 0.")
+
+    # Pairwise L1 distances, smaller is better.
+    # [p, p, g] -> [p, p]
+    dist = jnp.abs(pred[:, None, :] - true[None, :, :]).sum(-1)
+
+    # Regular ranking logic
+    order = jnp.argsort(dist, axis=1, stable=True)
+    true_idx = jnp.arange(p)
+    # Rank = first position (1-based) where the correct index appears
+    pos = jnp.argmax(order == true_idx[:, None], axis=1) + 1
+    mrr = jnp.mean(1.0 / pos.astype(jnp.float32))
+
+    # Top-k metrics (dedup + clamp)
+    uniq_topk = tuple(sorted(set(topk)))
+    out = {"mean_inv_rank": mrr}
+    for k in uniq_topk:
+        kk = int(max(1, min(k, p)))
+        top = jnp.mean((pos <= kk).astype(jnp.float32))
+        out[f"top{kk}"] = top
+    return out
 
 
 @jaxtyped(typechecker=beartype.beartype)

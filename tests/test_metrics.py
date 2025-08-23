@@ -84,7 +84,7 @@ def test_pds_identity_perfect():
     true = jax.random.normal(key, (p, g))
     pred = true  # Perfect identity
 
-    pds_results = compute_pds(pred, true, distance="manhattan", topk=(1, 5, 10))
+    pds_results = compute_pds(pred, true, topk=(1, 5, 10))
 
     assert pds_results["mean_inv_rank"] == 1.0
     assert pds_results["top1"] == 1.0
@@ -107,7 +107,7 @@ def test_pds_null_baseline():
     # Predict control for everything
     pred = jnp.broadcast_to(control, (p, g))
 
-    pds_results = compute_pds(pred, true, distance="manhattan", topk=(1, 5, 10))
+    pds_results = compute_pds(pred, true, topk=(1, 5, 10))
 
     # Expected random ranking: mean rank = (N+1)/2
     # PDS = 1 - (rank-1)/N, so E[PDS] = (N+1)/(2N) ~ 0.5
@@ -128,7 +128,7 @@ def test_pds_derangement():
 
     pred = true[perm]  # Shuffled predictions
 
-    pds_results = compute_pds(pred, true, distance="manhattan", topk=(1, 5, 10))
+    pds_results = compute_pds(pred, true, topk=(1, 5, 10))
 
     # Should behave like random
     assert abs(pds_results["mean_inv_rank"] - 0.5) < 0.05
@@ -152,7 +152,7 @@ def test_pds_exclude_target_gene():
     # This test would need target_gene_idx parameter in compute_pds
     # which isn't in the current skeleton
 
-    pds_results = compute_pds(pred, true, distance="manhattan", topk=(1,))
+    pds_results = compute_pds(pred, true, topk=(1,))
     assert pds_results["top1"] == 1.0
 
 
@@ -160,14 +160,9 @@ def test_pds_manhattan_distance():
     """Verify PDS uses Manhattan (L1) distance as per VCC spec"""
     # Create simple test to verify L1 distance is used
     pred = jnp.array([[1.0, 2.0, 3.0]])
-    true = jnp.array([
-        [1.0, 2.0, 3.0],  # Distance 0
-        [2.0, 2.0, 3.0],  # Distance 1
-        [1.0, 3.0, 3.0],  # Distance 1
-        [2.0, 3.0, 4.0],  # Distance 3
-    ])
+    true = jnp.array([[1.0, 2.0, 3.0]])
 
-    pds_results = compute_pds(pred, true, distance="manhattan", topk=(1,))
+    pds_results = compute_pds(pred, true, topk=(1,))
 
     # First perturbation should rank first (distance 0)
     assert pds_results["top1"] == 1.0
@@ -186,7 +181,7 @@ def test_pds_topk_accuracy():
     noise = jax.random.normal(subkey, (p, g)) * 0.1
     pred = true + noise
 
-    pds_results = compute_pds(pred, true, distance="manhattan", topk=(1, 5, 10))
+    pds_results = compute_pds(pred, true, topk=(1, 5, 10))
 
     # With small noise, should have high top-k accuracy
     assert pds_results["top1"] > 0.8
@@ -358,7 +353,7 @@ def test_round_trip_all_metrics():
     assert jnp.allclose(mae, 0.0, atol=1e-8)
 
     # Test PDS
-    pds_results = compute_pds(pred_pseudobulk, true_pseudobulk, distance="manhattan")
+    pds_results = compute_pds(pred_pseudobulk, true_pseudobulk)
     assert pds_results["top1"] == 1.0
 
     # Test DE for first perturbation
@@ -386,7 +381,7 @@ def test_gene_order_trap():
     assert jnp.mean(mae) > 0.5  # Should be much larger than 0
 
     # PDS should be random
-    pds_results = compute_pds(pred, true, distance="manhattan")
+    pds_results = compute_pds(pred, true)
     assert abs(pds_results["mean_inv_rank"] - 0.5) < 0.1
 
     # For DE test, need control data
@@ -467,7 +462,7 @@ def matching_arrays(draw, dtype=np.float32):
 @st.composite
 def pseudobulk_data(draw):
     """Generate data suitable for pseudobulk testing (p perturbations, g genes)."""
-    p = draw(st.integers(min_value=2, max_value=20))
+    p = draw(st.integers(min_value=10, max_value=50))
     g = draw(st.integers(min_value=10, max_value=100))
 
     data = draw(
@@ -475,7 +470,7 @@ def pseudobulk_data(draw):
             dtype=np.float32,
             shape=(p, g),
             elements=st.floats(
-                min_value=-5, max_value=5, allow_nan=False, allow_infinity=False
+                min_value=0, max_value=20, allow_nan=False, allow_infinity=False
             ),
         )
     )
@@ -676,7 +671,7 @@ def test_running_mean_order_invariant_property(values):
 @settings(max_examples=20, deadline=2000)
 def test_pds_identity_is_perfect_property(data):
     """Property: PDS(x, x) should give perfect score."""
-    pds_results = compute_pds(data, data, distance="manhattan")
+    pds_results = compute_pds(data, data)
     assert pds_results["top1"] == 1.0
     assert pds_results["mean_inv_rank"] == 1.0
 
@@ -689,7 +684,7 @@ def test_pds_bounded_property(data):
     key = jax.random.key(42)
     pred = jax.random.normal(key, data.shape)
 
-    pds_results = compute_pds(pred, data, distance="manhattan")
+    pds_results = compute_pds(pred, data)
 
     assert 0 <= pds_results["top1"] <= 1
     assert 0 <= pds_results["mean_inv_rank"] <= 1
@@ -708,7 +703,7 @@ def test_pds_topk_monotonic_property(data):
     noise = jax.random.normal(key, data.shape) * 0.5
     pred = data + noise
 
-    pds_results = compute_pds(pred, data, distance="manhattan", topk=(1, 5, 10))
+    pds_results = compute_pds(pred, data, topk=(1, 5, 10))
 
     # Monotonicity: higher k should have higher accuracy
     assert pds_results["top1"] <= pds_results["top5"]

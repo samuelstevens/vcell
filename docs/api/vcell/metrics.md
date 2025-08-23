@@ -27,7 +27,7 @@ Functions
     Returns:
       mae: [...]  (one scalar per leading example/perturbation index)
 
-`compute_pds(pred_by_pert: jaxtyping.Float[Array, 'p g'], true_by_pert: jaxtyping.Float[Array, 'p g'], *, distance: Literal['cosine', 'euclidean'] = 'cosine', topk: tuple[int, ...] = (1, 5, 10)) ‑> dict[str, float]`
+`compute_pds(pred: jaxtyping.Float[Array, 'p g'], true: jaxtyping.Float[Array, 'p g'], *, topk: tuple[int, ...] = (1, 5, 10)) ‑> dict[str, jaxtyping.Float[Array, '']]`
 :   Perturbation Discrimination Score (skeleton).
     
     Intent:
@@ -35,12 +35,12 @@ Functions
       Report mean inverse rank and top-k accuracy.
     
     Returns:
-      {
-        "mean_inv_rank": float,
-        "top1": float,
-        "top5": float,
-        ...
-      }
+        {
+            "mean_inv_rank": float,
+            "top1": float,
+            "top5": float,
+            ...
+        }
 
 Classes
 -------

@@ -195,6 +195,227 @@ from .naive_dataloader import PerturbationDataloader
 
 __all__ = ["PerturbationConfig", "PerturbationDataloader"]
 
+>>>> data/harmonize.py
+import collections
+import dataclasses
+import pathlib
+import re
+import typing as tp
+
+import anndata as ad
+import beartype
+import numpy as np
+import scanpy as sc
+from jaxtyping import Bool, Int, jaxtyped
+
+
+@jaxtyped(typechecker=beartype.beartype)
+@dataclasses.dataclass(frozen=True)
+class GeneMap:
+    """Mapping from a dataset's columns to the canonical VCC gene space."""
+
+    n_genes: int
+    """Number of VCC genes"""
+    present_mask: Bool[np.ndarray, " G"]
+    """which VCC genes exist in this dataset"""
+    ds_cols: Int[np.ndarray, " K"]
+    """dataset column indices to take"""
+    vcc_cols: Int[np.ndarray, " K"]
+    """destination VCC columns"""
+    stats: dict[str, int]
+    """counts for sanity reporting"""
+
+    def lift_to_vcc(self, x_ds: Int[np.ndarray, "..."]) -> Int[np.ndarray, "..."]:
+        """
+        Project dataset matrix slice (n, n_vars_ds) into VCC order (n, G), filling missing with zeros.
+        """
+        out = np.zeros((x_ds.shape[0], self.n_genes), dtype=np.float32)
+        out[:, self.vcc_cols] = x_ds[:, self.ds_cols]
+        return out
+
+
+@beartype.beartype
+class GeneVocab:
+    """
+    Canonical VCC gene space built from the VCC .h5ad.
+    - Prefers Ensembl IDs (stable).
+    - Keeps symbols for unique-only fallback.
+    """
+
+    def __init__(self, vcc_h5ad: str):
+        vcc = sc.read(vcc_h5ad, backed="r")
+        if "gene_id" not in vcc.var.columns:
+            raise ValueError(
+                "Expected VCC .var to contain a 'gene_id' column (Ensembl)."
+            )
+
+        self.n_genes = vcc.n_vars
+
+        self.vcc_ens: list[str] = [_strip_ens_version(s) for s in vcc.var["gene_id"]]
+        self.vcc_sym: list[str] = vcc.var.index.astype(str).tolist()
+
+        # Ensembl -> VCC index (unique by construction)
+        self._ens_to_idx: dict[str, int] = {e: i for i, e in enumerate(self.vcc_ens)}
+        # Symbol -> list of indices (can be non-unique)
+        self._sym_to_idxs: dict[str, list[int]] = collections.defaultdict(list)
+        for i, s in enumerate(self.vcc_sym):
+            self._sym_to_idxs[s].append(i)
+
+    def make_map(
+        self, ds: ad.AnnData, dup_mode: tp.Literal["sum", "keep", None] = None
+    ) -> GeneMap:
+        """
+        Create a GeneMap from a dataset.
+        """
+
+        if dup_mode is None:
+            # Try to figure out whether we have raw counts (integers) or log-normalized counts (floats, smaller).
+            row = ds.X[0]
+            row = row.toarray() if hasattr(row, "toarray") else np.asarray(row)
+            if row.max() > 100:
+                # Probably raw counts
+                dup_mode = "sum"
+            elif row[row > 1].min() < 2.0:
+                dup_mode = "keep"
+            else:
+                if ds.isbacked:
+                    self.logger.warning(
+                        "Not sure whether ds '%s' is raw counts or log normalized.",
+                        ds.filename,
+                    )
+                else:
+                    self.logger.warning(
+                        "Not sure whether ds is raw counts or log normalized."
+                    )
+
+        ds_sym = list(ds.var_names)
+        ds_ens = [_strip_ens_version(s) for s in ds.var["ensembl_id"].tolist()]
+
+        assert len(ds_sym) == len(ds_ens)
+
+        present_mask = np.zeros(self.n_genes, dtype=bool)
+        ds_cols: list[int] = []
+        vcc_cols: list[int] = []
+
+        n_ens_match = 0
+        n_sym_match = 0
+        n_sym_ambig = 0
+
+        for j, (ens, sym) in enumerate(zip(ds_ens, ds_sym)):
+            if ens and ens in self._ens_to_idx:
+                i = self._ens_to_idx[ens]
+                ds_cols.append(j)
+                vcc_cols.append(i)
+                present_mask[i] = True
+                n_ens_match += 1
+            else:
+                cand = self._sym_to_idxs.get(sym, [])
+                if len(cand) == 1:
+                    i = cand[0]
+                    ds_cols.append(j)
+                    vcc_cols.append(i)
+                    present_mask[i] = True
+                    n_sym_match += 1
+                elif len(cand) > 1:
+                    n_sym_ambig += 1
+                    # skip ambiguous symbols
+
+        ds_cols = np.asarray(ds_cols, dtype=int)
+        vcc_cols = np.asarray(vcc_cols, dtype=int)
+        stats = dict(
+            vcc_genes=self.n_genes,
+            ds_vars=len(ds_sym),
+            matched_by_ensembl=int(n_ens_match),
+            matched_by_symbol=int(n_sym_match),
+            skipped_ambiguous_symbol=int(n_sym_ambig),
+            total_matched=int(len(ds_cols)),
+            coverage=int(present_mask.sum()),
+        )
+        return GeneMap(
+            n_genes=self.n_genes,
+            present_mask=present_mask,
+            ds_cols=ds_cols,
+            vcc_cols=vcc_cols,
+            stats=stats,
+        )
+
+
+@beartype.beartype
+def _strip_ens_version(s: str) -> str:
+    """ENSG00000187634.5 -> ENSG00000187634"""
+    return re.sub(r"\.\d+$", "", s)
+
+
+@beartype.beartype
+class Dataloader:
+    def __init__(self, vcc_a5hd_path: pathlib.Path, scperturb_a5hd_path: pathlib.Path):
+        self.gene_vocab = GeneVocab(vcc_a5hd_path)
+        self.sc_adata = sc.read(scperturb_a5hd_path, backed="r")
+        self.gene_map = self.gene_vocab.make_map(self.sc_adata)
+
+        unique_perts = self.sc_adata.obs[self.pert_col].unique()
+        self.pert2id = {pert: i for i, pert in enumerate(sorted(unique_perts))}
+
+    def __iter__(self) -> collections.abc.Iterator[dict]:
+        pool = []
+        # Randomly sample from the pool
+        while True:
+            if not pool:
+                # If pool is empty, regenerate it
+                pool = self.adata.obs.get_columns(self.pert_col).to_list()
+
+            # Randomly select a combination
+            idx = self.rng.integers(0, len(pool))
+            pert = pool.pop(idx)
+
+            # Get perturbed cells for this combination
+            pert_mask = self.adata.obs[self.cfg.pert_col] == pert
+            pert_indices = np.where(pert_mask)[0]
+
+            # Skip if not enough perturbed cells
+            if len(pert_indices) < self.cfg.set_size:
+                self.logger.debug(
+                    "Skipping (%s, %s) with only %d indices.",
+                    cell_line,
+                    pert,
+                    len(pert_indices),
+                )
+                continue
+
+            # Just match cell line for controls
+            control_mask = (self.adata.obs[self.cfg.cell_line_col] == cell_line) & (
+                self.adata.obs[self.cfg.pert_col] == self.cfg.control_code
+            )
+            control_indices = np.where(control_mask)[0]
+
+            # Skip if no control cells available
+            if len(control_indices) == 0:
+                self.logger.debug(
+                    "Skipping (%s, %s) (no control cells).", cell_line, pert
+                )
+                continue
+
+            # Sample perturbed cells
+            sampled_pert_indices = self.rng.choice(
+                pert_indices, size=self.cfg.set_size, replace=False
+            )
+
+            # Sample control cells (with replacement if needed)
+            sampled_control_indices = self.rng.choice(
+                control_indices, size=self.cfg.set_size, replace=True
+            )
+
+            # Get the expression data
+            control_data = self._get_cell_data(sampled_control_indices.tolist())
+            target_data = self._get_cell_data(sampled_pert_indices.tolist())
+
+            yield {
+                "control": control_data,
+                "target": target_data,
+                "pert": self.pert2id[pert],
+                "cell_line": self.cline2id[cell_line],
+            }
+
 >>>> data/naive_dataloader.py
 # src/vcell/data/naive_dataloader.py
 import collections
@@ -716,12 +937,11 @@ def compute_mae(
 
 @jaxtyped(typechecker=beartype.beartype)
 def compute_pds(
-    pred_by_pert: Float[Array, "p g"],
-    true_by_pert: Float[Array, "p g"],
+    pred: Float[Array, "p g"],
+    true: Float[Array, "p g"],
     *,
-    distance: tp.Literal["cosine", "euclidean"] = "cosine",
     topk: tuple[int, ...] = (1, 5, 10),
-) -> dict[str, float]:
+) -> dict[str, Float[Array, ""]]:
     """Perturbation Discrimination Score (skeleton).
 
     Intent:
@@ -729,16 +949,36 @@ def compute_pds(
       Report mean inverse rank and top-k accuracy.
 
     Returns:
-      {
-        "mean_inv_rank": float,
-        "top1": float,
-        "top5": float,
-        ...
-      }
+        {
+            "mean_inv_rank": float,
+            "top1": float,
+            "top5": float,
+            ...
+        }
     """
-    raise NotImplementedError(
-        "compute_pds is a skeleton; implement ranking + reductions."
-    )
+    p, g = pred.shape
+    if p == 0:
+        raise ValueError("p (number of perturbations) must be > 0.")
+
+    # Pairwise L1 distances, smaller is better.
+    # [p, p, g] -> [p, p]
+    dist = jnp.abs(pred[:, None, :] - true[None, :, :]).sum(-1)
+
+    # Regular ranking logic
+    order = jnp.argsort(dist, axis=1, stable=True)
+    true_idx = jnp.arange(p)
+    # Rank = first position (1-based) where the correct index appears
+    pos = jnp.argmax(order == true_idx[:, None], axis=1) + 1
+    mrr = jnp.mean(1.0 / pos.astype(jnp.float32))
+
+    # Top-k metrics (dedup + clamp)
+    uniq_topk = tuple(sorted(set(topk)))
+    out = {"mean_inv_rank": mrr}
+    for k in uniq_topk:
+        kk = int(max(1, min(k, p)))
+        top = jnp.mean((pos <= kk).astype(jnp.float32))
+        out[f"top{kk}"] = top
+    return out
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -768,6 +1008,43 @@ def compute_de(
     raise NotImplementedError(
         "compute_de is a skeleton; implement DE test, BH-FDR, and comparisons."
     )
+
+>>>> nn/loss.py
+import beartype
+import jax.numpy as jnp
+from jaxtyping import Array, Float, jaxtyped
+
+
+@jaxtyped(typechecker=beartype.beartype)
+def _pairwise_lp(X, Y, p: float = 1.0, eps: float = 1e-12):
+    """Return pairwise ||x_i - y_j||^p. Shapes: X [S,G], Y [S,G] -> [S,S]."""
+    # squared euclidean
+    x2 = (X * X).sum(-1, keepdims=True)  # [S,1]
+    y2 = (Y * Y).sum(-1, keepdims=True).T  # [1,S]
+    d2 = jnp.clip(x2 + y2 - 2.0 * (X @ Y.T), 0.0, jnp.inf)  # numerical safety
+    if p == 2.0:
+        return d2  # already squared L2
+    # general p: ||.||^p = (||.||_2^2)^(p/2)
+    return jnp.power(d2 + eps, 0.5 * p)
+
+
+@jaxtyped(typechecker=beartype.beartype)
+def mmd2_energy_kernel(
+    pred: Float[Array, "set genes"], target: Float[Array, "set genes"], p: float = 1.0
+) -> Float[Array, ""]:
+    """
+    The squared MMD between the predicted and observed cell sets is computed in Eq. (19) of the STATE paper.
+    """
+    s, g = pred.shape
+    d_pp = _pairwise_lp(pred, pred, p)
+    d_tt = _pairwise_lp(target, target, p)
+    d_pt = _pairwise_lp(pred, target, p)
+    # k = -dist^p
+    k_pp = -d_pp
+    k_tt = -d_tt
+    k_pt = -d_pt
+    mmd2 = (k_pp.sum() + k_tt.sum() - 2.0 * k_pt.sum()) / (s * s)
+    return mmd2
 
 >>>> tpu-tricks.md
 ## TPU Tricks
@@ -805,4 +1082,10 @@ gcloud compute tpus tpu-vm scp tpu-2:~/projects/vcell/pred_raw.h5ad . --project 
 ```
 
 Note the `.` to signify where on your laptop it should go; `.` means this directory.
+
+## Adding Persistent Disks
+
+gcloud compute disks create tpu-data --size 200GB --type pd-standard --zone us-central1-f --project trc-project-466816
+
+gcloud alpha compute tpus tpu-vm attach-disk tpu-2 --zone us-central1-f --disk tpu-data --project trc-project-466816 --mode read-write
 

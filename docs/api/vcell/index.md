@@ -145,8 +145,15 @@ gcloud compute tpus tpu-vm scp tpu-2:~/projects/vcell/pred_raw.h5ad . --project 
 
 Note the `.` to signify where on your laptop it should go; `.` means this directory.
 
+## Adding Persistent Disks
+
+gcloud compute disks create tpu-data --size 200GB --type pd-standard --zone us-central1-f --project trc-project-466816
+
+gcloud alpha compute tpus tpu-vm attach-disk tpu-2 --zone us-central1-f --disk tpu-data --project trc-project-466816 --mode read-write
+
 Sub-modules
 -----------
 * vcell.data
 * vcell.helpers
 * vcell.metrics
+* vcell.nn
