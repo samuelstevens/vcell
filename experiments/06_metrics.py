@@ -122,14 +122,20 @@ def loss_and_aux(
     preds_bsg = jax.vmap(model)(ctrls_bsg, perts_b)
     mse = jnp.mean((preds_bsg - tgts_bsg) ** 2)
 
-    mu_ctrls_b1g = ctrls_bsg.mean(axis=1, keepdims=True)
+    mu_ctrls_bg = ctrls_bsg.mean(axis=1)
+    mu_preds_bg = preds_bsg.mean(axis=1)
+    mu_tgts_bg = tgts_bsg.mean(axis=1)
 
-    pds_b = jax.vmap(metrics.compute_pds)(
-        preds_bsg - mu_ctrls_b1g, tgts_bsg - mu_ctrls_b1g
+    effect_pds = metrics.compute_pds(
+        mu_preds_bg - mu_ctrls_bg, mu_tgts_bg - mu_ctrls_bg
     )
-    pds = {k: v_b.mean() for k, v_b in pds_b.items()}
+    pds = metrics.compute_pds(mu_preds_bg, mu_tgts_bg)
 
-    aux = {"mse": mse, **{f"pds/{k}": v for k, v in pds.items()}}
+    aux = {
+        "mse": mse,
+        **{f"pds/{k}": v for k, v in pds.items()},
+        **{f"effect-pds/{k}": v for k, v in effect_pds.items()},
+    }
     return mse, aux
 
 
