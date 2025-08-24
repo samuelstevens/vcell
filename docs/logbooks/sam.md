@@ -171,3 +171,44 @@ I think we need to provide some very high-level context. It should be simple, co
 
 Great news! I think we have a complete process of training and evaluating a model!
 
+TODOs
+
+1. Add wandb logging of loss and performance (speed)
+2. Add scperturb datasets
+
+
+# 08/16/2025
+
+1. Download datasets
+2. Do EDA
+3. Distributional loss
+4. Run training. Observe speed issues.
+   ^-- HAHHAHA like it's going to be this easy.
+
+# 08/23/2025
+
+1. Download datasets [done]
+2. Do EDA
+3. Distributional loss
+4. Run training. Observe speed issues.
+   ^-- HAHHAHA like it's going to be this easy.
+
+What does it mean to do EDA?
+I think I need to figure out and describe precisely what the training objective is, then I can write it, then I can force the data to fit it.
+
+I also think it's critical to log normalize the data
+
+So, my next set of tasks:
+
+1. Log-normalize the data. Add checks to make sure this is always true?
+2. Overfit on a single batch.
+3. Include the scPerturb data.
+4. Write a non-shit grain dataloader.
+5. Read about queued resources? Maybe my training jobs need to be docker images that run?
+
+Some tips from GPT:
+
+- Log grad norms and param update norms each step. If updates ~0, LR too small or parameters frozen; if huge/NaN, LR too big or bad init.
+- Check you’re training in the same space you evaluate: log-normalized in, log-normalized out. No hidden exp/log lingering.
+- Verify data labels: each batch element’s (line, batch, perturbation) used for the same control in eval.
+- Make your eval slice deterministic (fixed RNG, fixed HVG mask, fixed S cells). Randomness can hide real progress.
