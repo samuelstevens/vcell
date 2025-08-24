@@ -112,39 +112,22 @@ class Model(eqx.Module):
         return x_sg + delta_sg
 
 
-def _normalize_rows(X):
-    return X / (jnp.linalg.norm(X, axis=1, keepdims=True) + 1e-8)
-
-
-def retrieval_mrr(pred_effects_TG, true_effects_TG):
-    # pred_effects_TG / true_effects_TG: [T, G] pseudobulk effects
-    P = _normalize_rows(pred_effects_TG)
-    Tm = _normalize_rows(true_effects_TG)
-    sim = P @ Tm.T  # [T, T] cosine
-    # ranks: higher is better, so argsort descending
-    order = jnp.argsort(-sim, axis=1)  # [T, T]
-    # position of the true index in each row
-    true_idx = jnp.arange(sim.shape[0])
-    pos = jnp.argmax(order == true_idx[:, None], axis=1) + 1
-    mrr = jnp.mean(1.0 / pos.astype(jnp.float32))
-    top1 = jnp.mean((order[:, 0] == true_idx).astype(jnp.float32))
-    return mrr, top1
-
-
 @jaxtyped(typechecker=beartype.beartype)
 def loss_and_aux(
     model: eqx.Module,
-    ctrls: Float[Array, "batch set n_genes"],
-    perts: Int[Array, " batch"],
-    tgts: Float[Array, "batch set n_genes"],
+    ctrls_bsg: Float[Array, "batch set n_genes"],
+    perts_b: Int[Array, " batch"],
+    tgts_bsg: Float[Array, "batch set n_genes"],
 ) -> tuple[Float[Array, ""], dict]:
-    logits = jax.vmap(model)(ctrls, perts)
-    mse = jnp.mean((logits - tgts) ** 2)
+    preds_bsg = jax.vmap(model)(ctrls_bsg, perts_b)
+    mse = jnp.mean((preds_bsg - tgts_bsg) ** 2)
 
-    # Example: compute your other metrics here, all as jnp scalars
-    # (Assuming compute_pds returns jnp scalars; avoid Python floats inside jit.)
-    batch_pds = jax.vmap(metrics.compute_pds)(logits, tgts)
-    pds = {k: v.mean() for k, v in batch_pds.items()}
+    mu_ctrls_b1g = ctrls_bsg.mean(axis=1, keepdims=True)
+
+    pds_b = jax.vmap(metrics.compute_pds)(
+        preds_bsg - mu_ctrls_b1g, tgts_bsg - mu_ctrls_b1g
+    )
+    pds = {k: v_b.mean() for k, v_b in pds_b.items()}
 
     aux = {"mse": mse, **{f"pds/{k}": v for k, v in pds.items()}}
     return mse, aux
@@ -163,6 +146,8 @@ def step_model(
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_and_aux, has_aux=True)(
         model, ctrls, perts, tgts
     )
+
+    metrics["optim/grad-norm"] = optax.global_norm(grads)
 
     updates, new_state = optim.update(grads, state, model)
     model = eqx.apply_updates(model, updates)
@@ -250,9 +235,7 @@ def main(cfg: Config):
 
         if global_step % cfg.log_every == 0:
             metrics = {k: v.item() for k, v in metrics.items()}
-            logger.info(
-                "step: %d, loss: %.5f, pds: %s", global_step, loss.item(), metrics
-            )
+            logger.info("step: %d, loss: %.5f %s", global_step, loss.item(), metrics)
             run.log({"step": global_step, "train/loss": loss.item(), **metrics})
 
         if global_step > cfg.n_train:
