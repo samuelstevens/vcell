@@ -201,3 +201,13 @@ def merge_configs(base: tp.Any, overrides: dict) -> tp.Any:
                 base_dict[key] = value
 
     return dict_to_dataclass(base_dict, type(base))
+
+
+def check_grain_ops(ops: list[object]):
+    import cloudpickle
+
+    for op in ops:
+        try:
+            cloudpickle.dumps(op)
+        except TypeError as err:
+            raise AssertionError(f"Failed to pickle {op}: {err}")

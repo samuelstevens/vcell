@@ -1,5 +1,11 @@
 [[datasets]]
 h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_essential.h5ad"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+group_by = ["batch"]
 
 [[datasets]]
 h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_gwps.h5ad"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+group_by = ["batch"]

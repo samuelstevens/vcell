@@ -247,3 +247,12 @@ My order is going to be
 1. Include scPerturb data.
 2. Log normalization.
 3. Use a slightly bigger model.
+
+Including scPerturb checklist:
+
+- Is the pert2id lookup consistent across datasets?
+- Is the pert2id lookup consistent across reloads?
+- Is the model's pert embedding table the right size
+- Is the mask is being used?
+- Is the mask correct?
+- Are we stripping ensembl versions everywhere? -> what are ensembl versions?

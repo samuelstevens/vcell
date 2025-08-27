@@ -5,7 +5,6 @@ Train on the training split of VCC and on scPerturb data.
 
 """
 
-import collections
 import dataclasses
 import logging
 import os
@@ -26,13 +25,13 @@ import numpy as np
 import optax
 import pandas as pd
 import polars as pl
-import scanpy as sc
 import tyro
-from jaxtyping import Array, Bool, Float, Int, jaxtyped
+from jaxtyping import Array, Float, Int, jaxtyped
 
 import vcell.nn.optim
 import wandb
 from vcell import helpers, metrics
+from vcell.data import harmonize
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
@@ -42,11 +41,11 @@ logger = logging.getLogger("06")
 @beartype.beartype
 @dataclasses.dataclass(frozen=True)
 class DatasetConfig:
-    h5ad_fpath: str
+    h5ad_fpath: pathlib.Path
     """Path to h5ad file."""
     pert_col: str = "target_gene"
     ctrl_label: str = "non-targeting"
-    group_by: tuple[str, ...] = ("batch",)  # can be empty tuple for "all"
+    group_by: list[str] = dataclasses.field(default_factory=lambda: ["batch"])
 
 
 @beartype.beartype
@@ -195,137 +194,6 @@ def make_ctrl_pool(adata, key: chex.PRNGKey, max_controls: int = 20_000):
     return ctrl_pool
 
 
-@jaxtyped(typechecker=beartype.beartype)
-@dataclasses.dataclass(frozen=True)
-class GeneMap:
-    """Mapping from a dataset's columns to the canonical VCC gene space."""
-
-    n_genes: int
-    """Number of VCC genes"""
-    present_mask: Bool[np.ndarray, " G"]
-    """which VCC genes exist in this dataset"""
-    ds_cols: Int[np.ndarray, " K"]
-    """dataset column indices to take"""
-    vcc_cols: Int[np.ndarray, " K"]
-    """destination VCC columns"""
-    stats: dict[str, int]
-    """counts for sanity reporting"""
-
-    def lift_to_vcc(self, x_ds: Int[np.ndarray, "..."]) -> Int[np.ndarray, "..."]:
-        """
-        Project dataset matrix slice (n, n_vars_ds) into VCC order (n, G), filling missing with zeros.
-        """
-        out = np.zeros((x_ds.shape[0], self.n_genes), dtype=np.float32)
-        out[:, self.vcc_cols] = x_ds[:, self.ds_cols]
-        return out
-
-
-@beartype.beartype
-class GeneVocab:
-    """
-    Canonical VCC gene space built from the VCC .h5ad.
-    - Prefers Ensembl IDs (stable).
-    - Keeps symbols for unique-only fallback.
-    """
-
-    def __init__(self, vcc_h5ad: str):
-        vcc = sc.read(vcc_h5ad, backed="r")
-        if "gene_id" not in vcc.var.columns:
-            raise ValueError(
-                "Expected VCC .var to contain a 'gene_id' column (Ensembl)."
-            )
-
-        self.n_genes = vcc.n_vars
-
-        self.vcc_ens: list[str] = [_strip_ens_version(s) for s in vcc.var["gene_id"]]
-        self.vcc_sym: list[str] = vcc.var.index.astype(str).tolist()
-
-        # Ensembl -> VCC index (unique by construction)
-        self._ens_to_idx: dict[str, int] = {e: i for i, e in enumerate(self.vcc_ens)}
-        # Symbol -> list of indices (can be non-unique)
-        self._sym_to_idxs: dict[str, list[int]] = collections.defaultdict(list)
-        for i, s in enumerate(self.vcc_sym):
-            self._sym_to_idxs[s].append(i)
-
-    def make_map(
-        self, ds: ad.AnnData, dup_mode: tp.Literal["sum", "keep", None] = None
-    ) -> GeneMap:
-        """
-        Create a GeneMap from a dataset.
-        """
-
-        if dup_mode is None:
-            # Try to figure out whether we have raw counts (integers) or log-normalized counts (floats, smaller).
-            row = ds.X[0]
-            row = row.toarray() if hasattr(row, "toarray") else np.asarray(row)
-            if row.max() > 100:
-                # Probably raw counts
-                dup_mode = "sum"
-            elif row[row > 1].min() < 2.0:
-                dup_mode = "keep"
-            else:
-                if ds.isbacked:
-                    self.logger.warning(
-                        "Not sure whether ds '%s' is raw counts or log normalized.",
-                        ds.filename,
-                    )
-                else:
-                    self.logger.warning(
-                        "Not sure whether ds is raw counts or log normalized."
-                    )
-
-        ds_sym = list(ds.var_names)
-        ds_ens = [_strip_ens_version(s) for s in ds.var["ensembl_id"].tolist()]
-
-        assert len(ds_sym) == len(ds_ens)
-
-        present_mask = np.zeros(self.n_genes, dtype=bool)
-        ds_cols: list[int] = []
-        vcc_cols: list[int] = []
-
-        n_ens_match = 0
-        n_sym_match = 0
-        n_sym_ambig = 0
-
-        for j, (ens, sym) in enumerate(zip(ds_ens, ds_sym)):
-            if ens and ens in self._ens_to_idx:
-                i = self._ens_to_idx[ens]
-                ds_cols.append(j)
-                vcc_cols.append(i)
-                present_mask[i] = True
-                n_ens_match += 1
-            else:
-                cand = self._sym_to_idxs.get(sym, [])
-                if len(cand) == 1:
-                    i = cand[0]
-                    ds_cols.append(j)
-                    vcc_cols.append(i)
-                    present_mask[i] = True
-                    n_sym_match += 1
-                elif len(cand) > 1:
-                    n_sym_ambig += 1
-                    # skip ambiguous symbols
-
-        ds_cols = np.asarray(ds_cols, dtype=int)
-        vcc_cols = np.asarray(vcc_cols, dtype=int)
-        stats = dict(
-            vcc_genes=self.n_genes,
-            ds_vars=len(ds_sym),
-            matched_by_ensembl=int(n_ens_match),
-            matched_by_symbol=int(n_sym_match),
-            skipped_ambiguous_symbol=int(n_sym_ambig),
-            total_matched=int(len(ds_cols)),
-            coverage=int(present_mask.sum()),
-        )
-        return GeneMap(
-            n_genes=self.n_genes,
-            present_mask=present_mask,
-            ds_cols=ds_cols,
-            vcc_cols=vcc_cols,
-            stats=stats,
-        )
-
-
 @beartype.beartype
 def _strip_ens_version(s: str) -> str:
     """ENSG00000187634.5 -> ENSG00000187634"""
@@ -334,7 +202,7 @@ def _strip_ens_version(s: str) -> str:
 
 @jaxtyped(typechecker=beartype.beartype)
 class Sample(tp.TypedDict, total=False):
-    filepath: str
+    filepath: pathlib.Path
     all_rows: Int[np.ndarray, " n"]
     sampled_rows: Int[np.ndarray, " set_size"]
     pert_id: int
@@ -342,69 +210,84 @@ class Sample(tp.TypedDict, total=False):
 
 @beartype.beartype
 class MultiGroupSource(grain.sources.RandomAccessDataSource):
-    def __init__(
-        self,
-        a5hd_fpath,
-        group_by: list[str],
-        set_size: int,
-        pert_col: str = "target_gene",
-        ctrl_label: str = "non-targeting",
-    ):
-        adata = ad.read_h5ad(a5hd_fpath, backed="r")
-        control_groups = (
-            adata.obs[adata.obs[pert_col] == ctrl_label]
-            .groupby(group_by, observed=True)
-            .indices
-        )
-        target_groups = (
-            adata.obs[adata.obs[pert_col] != ctrl_label]
-            .groupby([pert_col] + group_by, observed=True)
-            .indices
-        )
-        self._samples = []
-        self._pert2id = {}
-        for pert, *others in sorted(target_groups):
-            key = tuple(others) if len(others) > 1 else others[0]
-            if key not in control_groups:
-                msg = "No observed cells for %s with %s='%s' (control)."
-                logger.info(msg, key, pert_col, ctrl_label)
-                continue
+    def __init__(self, cfgs: list[DatasetConfig], set_size: int):
+        self.cfgs = cfgs
+        self.set_size = set_size
 
-            ctrl_rows = control_groups[key]
-            pert_rows = target_groups[(pert, *others)]
+        self._samples: list[Sample] = []
+        self._pert2id: dict[str, int] = {}
 
-            if ctrl_rows.size < set_size:
-                msg = "Skipping %s because only %d control cells (need %d)."
-                logger.info(msg, key, ctrl_rows.size, set_size)
-                continue
+        for i, cfg in enumerate(cfgs):
+            adata = ad.read_h5ad(cfg.h5ad_fpath, backed="r")
 
-            if pert_rows.size < set_size:
-                msg = "Skipping %s because only %d pert cells (need %d)."
-                logger.info(msg, key, pert_rows.size, set_size)
-                continue
+            obs = adata.obs
 
-            if pert not in self._pert2id:
-                self._pert2id[pert] = len(self._pert2id)
-
-            pert_id = self._pert2id[pert]
-
-            self._samples.append(
-                Sample(
-                    filepath=a5hd_fpath,
-                    all_ctrl_rows=ctrl_rows,
-                    all_pert_rows=pert_rows,
-                    pert_id=pert_id,
-                )
+            control_groups = (
+                obs[obs[cfg.pert_col] == cfg.ctrl_label]
+                .groupby(cfg.group_by, observed=True)
+                .indices
             )
+            target_groups = (
+                obs[obs[cfg.pert_col] != cfg.ctrl_label]
+                .groupby([cfg.pert_col, *cfg.group_by], observed=True)
+                .indices
+            )
+
+            for pert, *gb in sorted(target_groups):
+                key = tuple(gb) if len(gb) > 1 else gb[0]
+                if key not in control_groups:
+                    msg = "No observed cells for %s with %s='%s' (control)."
+                    logger.info(msg, key, cfg.pert_col, cfg.ctrl_label)
+                    continue
+
+                ctrl_rows = control_groups[key]
+                pert_rows = target_groups[(pert, *gb)]
+
+                if ctrl_rows.size < set_size:
+                    logger.debug(
+                        "Skipping %s from %s because only %d control cells (need %d).",
+                        ", ".join(f"{k}={v}" for k, v in zip(cfg.group_by, gb)),
+                        cfg.h5ad_fpath.stem,
+                        ctrl_rows.size,
+                        set_size,
+                    )
+                    continue
+
+                if pert_rows.size < set_size:
+                    logger.debug(
+                        "Skipping %s from %s because only %d pert cells (need %d).",
+                        ", ".join(f"{k}={v}" for k, v in zip(cfg.group_by, gb)),
+                        cfg.h5ad_fpath.stem,
+                        pert_rows.size,
+                        set_size,
+                    )
+                    continue
+
+                # TODO: Normalize pert_key
+
+                if pert not in self._pert2id:
+                    self._pert2id[pert] = len(self._pert2id)
+                pert_id = self._pert2id[pert]
+
+                self._samples.append(
+                    Sample(
+                        filepath=cfg.h5ad_fpath,
+                        all_ctrl_rows=ctrl_rows,
+                        all_pert_rows=pert_rows,
+                        pert_id=pert_id,
+                    )
+                )
+
+        logger.info("Loaded %s from %d files.", self, len(cfgs))
 
     def __len__(self):
         return len(self._samples)
 
-    def __getitem__(self, k: int):
+    def __getitem__(self, k: int) -> Sample:
         return self._samples[k]
 
     def __repr__(self):
-        return f"GroupSource(n={len(self)})"
+        return f"MultiGroupSource(n={len(self)}, cfgs={len(self.cfgs)}, set={self.set_size})"
 
 
 @beartype.beartype
@@ -413,34 +296,83 @@ class SampleSet(grain.transforms.RandomMap):
         self.set_size = set_size
 
     def random_map(self, sample: Sample, rng) -> Sample:
-        ctrl_idx = rng.choice(
+        ctrl_i = rng.choice(
             len(sample["all_ctrl_rows"]), size=self.set_size, replace=False
         )
-        sample["sampled_ctrl_rows"] = sample["all_ctrl_rows"][ctrl_idx]
-        pert_idx = rng.choice(
+        sample["sampled_ctrl_rows"] = sample["all_ctrl_rows"][ctrl_i]
+        pert_i = rng.choice(
             len(sample["all_pert_rows"]), size=self.set_size, replace=False
         )
-        sample["sampled_pert_rows"] = sample["all_pert_rows"][pert_idx]
+        sample["sampled_pert_rows"] = sample["all_pert_rows"][pert_i]
         return sample
 
 
 @beartype.beartype
-class LoadH5AD(grain.transforms.Map):
-    def __init__(self):
-        self._adata = None
+class LoadAndLift(grain.transforms.Map):
+    def __init__(self, vcc_h5ad: str | pathlib.Path):
+        self._vcc_h5ad = str(vcc_h5ad)
+        self._adatas: dict[str, ad.AnnData] = {}
+        self._gmaps: dict[str, harmonize.GeneMap] = {}
+
+        # Lazily initialized objects
+        self._logger = None
+        self._gene_vocab = None
+
+    @property
+    def logger(self):
+        if self._logger is None:
+            logging.basicConfig(level=logging.DEBUG, format=log_format)
+            self._logger = logging.getLogger(f"load-{os.getpid()}")
+        return self._logger
+
+    @property
+    def gene_vocab(self):
+        if self._gene_vocab is None:
+            self._gene_vocab = harmonize.GeneVocab(self._vcc_h5ad)
+        return self._gene_vocab
+
+    def get_adata(self, fpath: str | pathlib.Path) -> ad.AnnData:
+        fpath = str(fpath)
+        if fpath not in self._adatas:
+            self._adatas[fpath] = ad.read_h5ad(fpath, backed="r")
+            self.logger.info("Opened %s.", fpath)
+        return self._adatas[fpath]
+
+    def get_gene_map(self, fpath: str | pathlib.Path) -> harmonize.GeneMap:
+        fpath = str(fpath)
+        if fpath not in self._gmaps:
+            adata = self.get_adata(fpath)
+            self._gmaps[fpath] = self.gene_vocab.make_map(adata)
+        return self._gmaps[fpath]
 
     def map(self, sample: Sample):
-        if self._adata is None:
-            self._adata = ad.read_h5ad(sample["filepath"], backed="r")
+        adata = self.get_adata(sample["filepath"])
+        gmap = self.get_gene_map(sample["filepath"])
 
-        control = self._adata.X[sample["sampled_ctrl_rows"]]
-        target = self._adata.X[sample["sampled_pert_rows"]]
+        # .X can only be indexed in increasing order, so we have to sort. Then we can unsort to preserve the random order again.
+        ctrl_sort = np.argsort(sample["sampled_ctrl_rows"])
+        pert_sort = np.argsort(sample["sampled_pert_rows"])
+        ctrl_unsort = np.argsort(ctrl_sort)
+        pert_unsort = np.argsort(pert_sort)
 
-        # return numpy arrays (Grain will device-put later)
+        ctrl_i = sample["sampled_ctrl_rows"][ctrl_sort]
+        pert_i = sample["sampled_pert_rows"][pert_sort]
+
+        x_ctrl = adata.X[ctrl_i]
+        self.logger.debug("Loaded %d ctrl samples.", len(x_ctrl))
+        x_pert = adata.X[pert_i]
+        self.logger.debug("Loaded %d pert samples.", len(x_pert))
+
+        x_ctrl = self.array(x_ctrl)[ctrl_unsort]
+        x_pert = self.array(x_pert)[pert_unsort]
+
+        x_ctrl = gmap.lift_to_vcc(x_ctrl)
+        x_pert = gmap.lift_to_vcc(x_pert)
 
         return {
-            "target": self.array(target),
-            "control": self.array(control),
+            "control": x_ctrl,
+            "target": x_pert,
+            "mask": gmap.present_mask,
             "pert_id": sample["pert_id"],
         }
 
@@ -452,17 +384,15 @@ class LoadH5AD(grain.transforms.Map):
 
 @beartype.beartype
 def make_dataloader(cfg: Config):
-    source = MultiGroupSource(
-        cfg.vcc / "adata_Training.h5ad",
-        pert_col="target_gene",
-        group_by=["batch"],
-        set_size=cfg.set_size,
-    )
     ops = [
         SampleSet(set_size=cfg.set_size),
-        LoadH5AD(),
+        LoadAndLift(cfg.vcc / "adata_Training.h5ad"),
         grain.transforms.Batch(batch_size=cfg.batch_size),
     ]
+
+    helpers.check_grain_ops(ops)
+
+    source = MultiGroupSource(cfg.datasets, set_size=cfg.set_size)
 
     sampler = grain.samplers.IndexSampler(
         num_records=len(source),
