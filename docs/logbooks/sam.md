@@ -256,3 +256,26 @@ Including scPerturb checklist:
 - Is the mask is being used?
 - Is the mask correct?
 - Are we stripping ensembl versions everywhere? -> what are ensembl versions?
+
+Disk speeds :)
+
+Sequential
+
+```sh
+fio --name=net --filename=$FILENAME --rw=read --bs=1kb --direct=1 --iodepth=16 --runtime=30 --time_based
+```
+
+Random
+
+```sh
+fio --name=net --filename=$FILENAME --rw=randread --bs=1kb --direct=1 --iodepth=16 --runtime=30 --time_based
+```
+
+| Disk | Task | Result |
+|---|---|---|
+| Macbook SSD | Sequential Read | READ: bw=88.2MiB/s (92.4MB/s), 88.2MiB/s-88.2MiB/s (92.4MB/s-92.4MB/s), io=2645MiB (2773MB) |
+| Macbook SSD | Random Read | READ: bw=31.5MiB/s (33.1MB/s), 31.5MiB/s-31.5MiB/s (33.1MB/s-33.1MB/s), io=946MiB (992MB) |
+| External HDD | Sequential Read | READ: bw=700KiB/s (717kB/s), 700KiB/s-700KiB/s (717kB/s-717kB/s), io=20.5MiB (21.5MB) |
+| External HDD | Random Read | READ: bw=4785B/s (4785B/s), 4785B/s-4785B/s (4785B/s-4785B/s), io=141KiB (144kB) |
+| GCC PD | Sequential Read | READ: bw=2305KiB/s (2360kB/s), 2305KiB/s-2305KiB/s (2360kB/s-2360kB/s), io=67.5MiB (70.8MB) |
+| GCC PD | Random Read | READ: bw=41.6KiB/s (42.6kB/s), 41.6KiB/s-41.6KiB/s (42.6kB/s-42.6kB/s), io=1248KiB (1278kB) |
