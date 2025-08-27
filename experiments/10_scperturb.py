@@ -10,7 +10,9 @@ import dataclasses
 import logging
 import os
 import pathlib
+import pprint
 import re
+import tomllib
 import typing as tp
 
 import anndata as ad
@@ -339,7 +341,7 @@ class Sample(tp.TypedDict, total=False):
 
 
 @beartype.beartype
-class GroupSource(grain.sources.RandomAccessDataSource):
+class MultiGroupSource(grain.sources.RandomAccessDataSource):
     def __init__(
         self,
         a5hd_fpath,
@@ -450,7 +452,7 @@ class LoadH5AD(grain.transforms.Map):
 
 @beartype.beartype
 def make_dataloader(cfg: Config):
-    source = GroupSource(
+    source = MultiGroupSource(
         cfg.vcc / "adata_Training.h5ad",
         pert_col="target_gene",
         group_by=["batch"],
@@ -483,7 +485,8 @@ def make_dataloader(cfg: Config):
 
 @beartype.beartype
 def main(
-    cfg: str = "", override: tp.Annotated[Config, tyro.conf.arg(name="")] = Config()
+    cfg: pathlib.Path | None = None,
+    override: tp.Annotated[Config, tyro.conf.arg(name="")] = Config(),
 ):
     """Run the experiment.
 
@@ -492,7 +495,28 @@ def main(
         override: CLI options to modify the config file.
     """
 
-    # Load the config from the cfg path. If it doesn't exist, complain. Then overwrite values in the loaded-from-disk cfg object with any non-default values in override.
+    if cfg is None:
+        # Use override directly as the config
+        cfg = override
+    else:
+        # Load config from file
+        if not cfg.exists():
+            raise FileNotFoundError(f"Config file not found: {cfg}")
+
+        with open(cfg, "rb") as fd:
+            cfg_dict = tomllib.load(fd)
+
+        # Convert TOML dict to Config dataclass
+        loaded_cfg = helpers.dict_to_dataclass(cfg_dict, Config)
+
+        # Find non-default override values
+        default_cfg = Config()
+        non_default_overrides = helpers.get_non_default_values(override, default_cfg)
+
+        # Merge non-default overrides into loaded config
+        cfg = helpers.merge_configs(loaded_cfg, non_default_overrides)
+
+    pprint.pprint(dataclasses.asdict(cfg))
 
     key = jax.random.key(seed=cfg.seed)
 
