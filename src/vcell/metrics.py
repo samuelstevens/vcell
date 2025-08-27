@@ -90,7 +90,7 @@ def compute_pds(
     *,
     topk: tuple[int, ...] = (1, 5, 10),
 ) -> dict[str, Float[Array, ""]]:
-    """Perturbation Discrimination Score (skeleton).
+    """Perturbation Discrimination Score.
 
     Intent:
       For each perturbation i, rank true profiles by distance to pred[i].

@@ -1,0 +1,5 @@
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_essential.h5ad"
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_gwps.h5ad"

@@ -212,3 +212,38 @@ Some tips from GPT:
 - Check you’re training in the same space you evaluate: log-normalized in, log-normalized out. No hidden exp/log lingering.
 - Verify data labels: each batch element’s (line, batch, perturbation) used for the same control in eval.
 - Make your eval slice deterministic (fixed RNG, fixed HVG mask, fixed S cells). Randomness can hide real progress.
+
+# 08/24/2025
+
+I'm going to make a huge checklist of things to do.
+
+- Log normalize the data.
+- [done] Overfit with pseudobulk MSE
+- Include the scPerturb data
+- Write a non-shit grain dataloader.
+- Learn about queued GCS resources
+- Convert h5mu to h5ad
+- Distributional loss (MDD2)
+- Add a validation/holdout split.
+- Log optimizer and loss as config options
+- Log effect L1
+
+My order is going to be
+
+- [done] Los optimizer as config option
+- Log loss term as config option
+- [done] Log effect L1
+- [done] Write a non-shit grain dataloader.
+- Log normalize the data.
+- Include the scPerturb data
+- Distributional loss (MDD2)
+- Learn about queued GCS resources
+- Convert h5mu to h5ad
+- Add a validation/holdout split.
+- Use a bigger model
+
+# 08/27/2025
+
+1. Include scPerturb data.
+2. Log normalization.
+3. Use a slightly bigger model.
