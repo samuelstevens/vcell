@@ -2,10 +2,33 @@
 h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_essential.h5ad"
 pert_col = "gene"
 ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
 group_by = ["batch"]
 
 [[datasets]]
 h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_gwps.h5ad"
 pert_col = "gene"
 ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
+group_by = ["batch"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_hepg2.h5ad"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
+group_by = ["batch"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_jurkat.h5ad"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
+group_by = ["batch"]
+
+[[datasets]]
+h5ad_fpath = "data/inputs/vcc/adata_Training.h5ad"
+pert_col = "target_gene"
+ctrl_label = "non-targeting"
+gene_id_col = "gene_id"
 group_by = ["batch"]

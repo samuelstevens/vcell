@@ -231,20 +231,21 @@ I'm going to make a huge checklist of things to do.
 My order is going to be
 
 - [done] Los optimizer as config option
-- Log loss term as config option
 - [done] Log effect L1
 - [done] Write a non-shit grain dataloader.
+- [done] Include the scPerturb data
 - Log normalize the data.
-- Include the scPerturb data
 - Distributional loss (MDD2)
 - Learn about queued GCS resources
 - Convert h5mu to h5ad
 - Add a validation/holdout split.
 - Use a bigger model
+- Log loss term as config option
+- Metrics
 
 # 08/27/2025
 
-1. Include scPerturb data.
+1. [done] Include scPerturb data.
 2. Log normalization.
 3. Use a slightly bigger model.
 
@@ -256,8 +257,6 @@ Including scPerturb checklist:
 - Is the mask is being used?
 - Is the mask correct?
 - Are we stripping ensembl versions everywhere? -> what are ensembl versions?
-
-Disk speeds :)
 
 Sequential
 
@@ -279,3 +278,23 @@ fio --name=net --filename=$FILENAME --rw=randread --bs=1kb --direct=1 --iodepth=
 | External HDD | Random Read | READ: bw=4785B/s (4785B/s), 4785B/s-4785B/s (4785B/s-4785B/s), io=141KiB (144kB) |
 | GCC PD | Sequential Read | READ: bw=2305KiB/s (2360kB/s), 2305KiB/s-2305KiB/s (2360kB/s-2360kB/s), io=67.5MiB (70.8MB) |
 | GCC PD | Random Read | READ: bw=41.6KiB/s (42.6kB/s), 41.6KiB/s-41.6KiB/s (42.6kB/s-42.6kB/s), io=1248KiB (1278kB) |
+
+# 08/30/2025
+
+I am working on understanding how to leverage these six datasets for training:
+
+- VCC training data
+- Replogle x2, Nadig x2
+- KOLF
+
+So I think for each dataset source, we need to:
+
+1. Map observation columns to ensembl IDs. If they have gene symbols but not ensembl IDs, then we need to look up the ensembld IDs using some web service
+2. Measure the highly variable genes using scanpy for each dataset. Then we pick the top 2K across all datasets by (1) the intersection of HVGs across all dataset (2) fill the rest by which genes are HVGs in the most number of datasets
+3. Record the keys to use for grouping by (batch, cell line, etc) for each dataset
+4. Log-normalize each dataset CP10K + log1p
+
+I think then we can sample a groupby key, select a perturbation, then sample S control RNA transcriptomes, sample S perturbed RNA transcriptomes, and use the 2K HVGs as input/output instead of the 18K. Then we will fill in the remaining 16K with mean counts, which should be okay since
+
+1. The baseline is mean counts, so we aren't any worse
+2. They're not highly variable, so they shouldn't change too much

@@ -10,7 +10,6 @@ import logging
 import os
 import pathlib
 import pprint
-import re
 import tomllib
 import typing as tp
 
@@ -45,7 +44,8 @@ class DatasetConfig:
     """Path to h5ad file."""
     pert_col: str = "target_gene"
     ctrl_label: str = "non-targeting"
-    group_by: list[str] = dataclasses.field(default_factory=lambda: ["batch"])
+    group_by: tuple[str, ...] = ("batch",)
+    gene_id_col: str = "ensembl_id"
 
 
 @beartype.beartype
@@ -77,6 +77,36 @@ class Config:
     """where to store temporary/intermediate outputs like the memmap."""
     out_path: pathlib.Path = pathlib.Path("pred_raw.h5ad")
     """final submission-ready H5AD (run cell-eval prep afterwards)."""
+
+
+@beartype.beartype
+class PertVocab:
+    """Canonical mapping from target gene (Ensembl) -> integer id, plus OOV."""
+
+    ens2id: dict[str, int]
+    id2ens: list[str]
+    oov_id: int
+
+    def __init__(self, vocab: harmonize.GeneVocab, cfgs: list[DatasetConfig]):
+        symbols = set()
+        for cfg in cfgs:
+            adata = ad.read_h5ad(str(cfg.h5ad_fpath), backed="r")
+            col = adata.obs[cfg.pert_col].astype(str)
+            for s in np.unique(col[col != cfg.ctrl_label]):
+                if s.startswith("ENSG"):
+                    s = harmonize.strip_ens_version(s)
+                else:
+                    s = harmonize.parse_symbol(s)
+                symbols.add(s)
+
+        ens2id = {e: i for i, e in enumerate(ens_list)}
+        id2ens = ens_list
+        oov_id = len(id2ens)
+        return PertVocab(ens2id=ens2id, id2ens=id2ens, oov_id=oov_id)
+
+    def lookup(self, s: str) -> int:
+        e = harmonize.strip_ens_version(s) if s.startswith("ENSG") else s
+        return self.ens2id.get(e, self.oov_id)
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -132,13 +162,14 @@ def loss_and_aux(
     ctrls_bsg: Float[Array, "batch set n_genes"],
     perts_b: Int[Array, " batch"],
     tgts_bsg: Float[Array, "batch set n_genes"],
+    mask_bg: Int[Array, "batch n_genes"],
 ) -> tuple[Float[Array, ""], dict]:
     preds_bsg = jax.vmap(model)(ctrls_bsg, perts_b)
     mu_ctrls_bg = ctrls_bsg.mean(axis=1)
     mu_preds_bg = preds_bsg.mean(axis=1)
     mu_tgts_bg = tgts_bsg.mean(axis=1)
 
-    mu_mse = jnp.mean((mu_preds_bg - mu_tgts_bg) ** 2)
+    mu_mse = jnp.mean(((mu_preds_bg - mu_tgts_bg) * mask_bg) ** 2)
 
     effect_pds = metrics.compute_pds(
         mu_preds_bg - mu_ctrls_bg, mu_tgts_bg - mu_ctrls_bg
@@ -161,12 +192,13 @@ def step_model(
     model: eqx.Module,
     optim: optax.GradientTransformation,
     state: tp.Any,
-    ctrls: Float[Array, "batch set n_genes"],
-    perts: Int[Array, " batch"],
-    tgts: Float[Array, "batch set n_genes"],
+    ctrls_bsg: Float[Array, "batch set n_genes"],
+    perts_b: Int[Array, " batch"],
+    tgts_bsg: Float[Array, "batch set n_genes"],
+    mask_bg: Int[Array, "batch n_genes"],
 ) -> tuple[eqx.Module, tp.Any, Float[Array, ""], dict]:
     (loss, metrics), grads = eqx.filter_value_and_grad(loss_and_aux, has_aux=True)(
-        model, ctrls, perts, tgts
+        model, ctrls_bsg, perts_b, tgts_bsg, mask_bg
     )
 
     updates, new_state = optim.update(grads, state, model)
@@ -194,15 +226,9 @@ def make_ctrl_pool(adata, key: chex.PRNGKey, max_controls: int = 20_000):
     return ctrl_pool
 
 
-@beartype.beartype
-def _strip_ens_version(s: str) -> str:
-    """ENSG00000187634.5 -> ENSG00000187634"""
-    return re.sub(r"\.\d+$", "", s)
-
-
 @jaxtyped(typechecker=beartype.beartype)
 class Sample(tp.TypedDict, total=False):
-    filepath: pathlib.Path
+    cfg: DatasetConfig
     all_rows: Int[np.ndarray, " n"]
     sampled_rows: Int[np.ndarray, " set_size"]
     pert_id: int
@@ -224,7 +250,7 @@ class MultiGroupSource(grain.sources.RandomAccessDataSource):
 
             control_groups = (
                 obs[obs[cfg.pert_col] == cfg.ctrl_label]
-                .groupby(cfg.group_by, observed=True)
+                .groupby(list(cfg.group_by), observed=True)
                 .indices
             )
             target_groups = (
@@ -271,7 +297,7 @@ class MultiGroupSource(grain.sources.RandomAccessDataSource):
 
                 self._samples.append(
                     Sample(
-                        filepath=cfg.h5ad_fpath,
+                        cfg=cfg,
                         all_ctrl_rows=ctrl_rows,
                         all_pert_rows=pert_rows,
                         pert_id=pert_id,
@@ -311,8 +337,8 @@ class SampleSet(grain.transforms.RandomMap):
 class LoadAndLift(grain.transforms.Map):
     def __init__(self, vcc_h5ad: str | pathlib.Path):
         self._vcc_h5ad = str(vcc_h5ad)
-        self._adatas: dict[str, ad.AnnData] = {}
-        self._gmaps: dict[str, harmonize.GeneMap] = {}
+        self._adatas: dict[DatasetConfig, ad.AnnData] = {}
+        self._gmaps: dict[DatasetConfig, harmonize.GeneMap] = {}
 
         # Lazily initialized objects
         self._logger = None
@@ -331,23 +357,25 @@ class LoadAndLift(grain.transforms.Map):
             self._gene_vocab = harmonize.GeneVocab(self._vcc_h5ad)
         return self._gene_vocab
 
-    def get_adata(self, fpath: str | pathlib.Path) -> ad.AnnData:
-        fpath = str(fpath)
-        if fpath not in self._adatas:
-            self._adatas[fpath] = ad.read_h5ad(fpath, backed="r")
+    def get_adata(self, cfg: DatasetConfig) -> ad.AnnData:
+        if cfg not in self._adatas:
+            fpath = str(cfg.h5ad_fpath)
+            self._adatas[cfg] = ad.read_h5ad(fpath, backed="r")
             self.logger.info("Opened %s.", fpath)
-        return self._adatas[fpath]
+        return self._adatas[cfg]
 
-    def get_gene_map(self, fpath: str | pathlib.Path) -> harmonize.GeneMap:
-        fpath = str(fpath)
-        if fpath not in self._gmaps:
-            adata = self.get_adata(fpath)
-            self._gmaps[fpath] = self.gene_vocab.make_map(adata)
-        return self._gmaps[fpath]
+    def get_gene_map(self, cfg: DatasetConfig) -> harmonize.GeneMap:
+        if cfg not in self._gmaps:
+            adata = self.get_adata(cfg)
+            self._gmaps[cfg] = self.gene_vocab.make_map(
+                adata, gene_id_col=cfg.gene_id_col
+            )
+        return self._gmaps[cfg]
 
     def map(self, sample: Sample):
-        adata = self.get_adata(sample["filepath"])
-        gmap = self.get_gene_map(sample["filepath"])
+        cfg = sample["cfg"]
+        adata = self.get_adata(cfg)
+        gmap = self.get_gene_map(cfg)
 
         # .X can only be indexed in increasing order, so we have to sort. Then we can unsort to preserve the random order again.
         ctrl_sort = np.argsort(sample["sampled_ctrl_rows"])
@@ -359,9 +387,7 @@ class LoadAndLift(grain.transforms.Map):
         pert_i = sample["sampled_pert_rows"][pert_sort]
 
         x_ctrl = adata.X[ctrl_i]
-        self.logger.debug("Loaded %d ctrl samples.", len(x_ctrl))
         x_pert = adata.X[pert_i]
-        self.logger.debug("Loaded %d pert samples.", len(x_pert))
 
         x_ctrl = self.array(x_ctrl)[ctrl_unsort]
         x_pert = self.array(x_pert)[pert_unsort]
@@ -389,7 +415,6 @@ def make_dataloader(cfg: Config):
         LoadAndLift(cfg.vcc / "adata_Training.h5ad"),
         grain.transforms.Batch(batch_size=cfg.batch_size),
     ]
-
     helpers.check_grain_ops(ops)
 
     source = MultiGroupSource(cfg.datasets, set_size=cfg.set_size)
@@ -401,6 +426,7 @@ def make_dataloader(cfg: Config):
         num_epochs=None,  # stream forever
         shard_options=grain.sharding.ShardOptions(shard_index=0, shard_count=1),
     )
+
     dl = grain.DataLoader(
         data_source=source,
         sampler=sampler,
@@ -486,6 +512,7 @@ def main(
             jnp.array(batch["control"]),
             jnp.array(batch["pert_id"]),
             jnp.array(batch["target"]),
+            jnp.array(batch["mask"], dtype=int),
         )
         global_step += 1
 
