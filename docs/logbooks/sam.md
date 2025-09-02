@@ -298,3 +298,17 @@ I think then we can sample a groupby key, select a perturbation, then sample S c
 
 1. The baseline is mean counts, so we aren't any worse
 2. They're not highly variable, so they shouldn't change too much
+
+# 08/31/2025
+
+I am getting absolutely railed by the complexity of this project.
+I almost don't know how to keep all the different pieces in my head.
+There are more moving parts than I know what to do with.
+
+Broadly, I think we can summarize it into:
+
+1. Data preparation (HVGs, ensembl ID mapping, data loader, reformatting data for efficient row-reads, etc)
+2. Cloud preparation (GCS buckets, persistent disks, spot instances, queued resources, init.sh, etc)
+3. Misc (transformer architecture, wiring it all together, picking mean counts for non-HVG genes, testing)
+
+I think I should work on them in this order too. The key is to do the bare minimum necessary so that I can keep making progress, recognizing that I can come back to the different stages.
