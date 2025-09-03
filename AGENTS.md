@@ -12,6 +12,7 @@
 - Only use `setup` for naming functions that don't return anything.
 
 - You can use `gh` to access issues and PRs on GitHub to gather more context. We use GitHub issues a lot to share ideas and communicate about problems, so you should almost always check to see if there's a relevant GitHub issue for whatever you're working on.
+- Write single-line commit messages; never say you co-authored a commit.
 
 # Tensor Variables
 

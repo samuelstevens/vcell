@@ -8,19 +8,159 @@ import typing as tp
 
 import anndata as ad
 import beartype
+import matplotlib.pyplot as plt
 import mudata as md
 import numpy as np
 import scipy.sparse as sp
 import tyro
 
 import vcell.helpers
+import vcell.pp
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
 
 
 @beartype.beartype
-def save_cell_weights(
+def plot_hvgs(
+    file: pathlib.Path,
+    dump_to: pathlib.Path | None = None,
+    n_top_genes: int | None = None,
+):
+    """
+    Create a scatter plot showing HVGs vs other genes on log(mean) vs log(variance).
+
+    Args:
+        file: Path to JSON file with HVG results
+        dump_to: Directory to save the plot (defaults to file's parent directory)
+        n_top_genes: Number of HVGs for the title (defaults to count in the JSON)
+    """
+    import pandas as pd
+
+    # Load HVG results from JSON
+    hvg_df = pd.read_json(file, orient="index")
+
+    # Set defaults
+    if dump_to is None:
+        dump_to = file.parent
+
+    means = hvg_df["means"].values
+    variances = hvg_df["variances"].values
+
+    # Determine which genes to mark as HVG based on n_top_genes
+    if n_top_genes is None:
+        # Use the HVG labels from the dataframe
+        n_top_genes = hvg_df["highly_variable"].sum()
+        hvg_mask = hvg_df["highly_variable"].values
+    else:
+        # Re-select top N genes based on variances_norm
+        if "variances_norm" in hvg_df.columns:
+            # Use variance residuals for selection
+            top_indices = np.argsort(hvg_df["variances_norm"].values)[-n_top_genes:]
+            hvg_mask = np.zeros(len(hvg_df), dtype=bool)
+            hvg_mask[top_indices] = True
+        else:
+            # Fallback to using existing highly_variable column
+            hvg_mask = hvg_df["highly_variable"].values
+            n_top_genes = hvg_mask.sum()
+
+    # Compute log values with small epsilon for numerical stability
+    eps = 1e-12
+    log_means = np.log(means + eps)
+    log_vars = np.log(variances + eps)
+
+    # Fit lowess trend for visualization (simplified - just for the trend line)
+    # We'll use the variance stabilization from our implementation
+    from scipy.interpolate import PchipInterpolator
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+
+    # Filter to genes with non-zero variance for fitting
+    mask = variances > 0
+    if mask.sum() > 3:
+        # Sort for lowess fitting
+        order = np.argsort(log_means[mask])
+        x_sorted = log_means[mask][order]
+        y_sorted = log_vars[mask][order]
+
+        # Fit lowess
+        try:
+            smooth = lowess(
+                endog=y_sorted,
+                exog=x_sorted,
+                frac=0.3,
+                it=3,
+                return_sorted=True,
+            )
+            xs_smooth, ys_smooth = smooth[:, 0], smooth[:, 1]
+
+            # Remove near-duplicate x values
+            keep = np.concatenate(([True], np.diff(xs_smooth) > 1e-12))
+            xs_smooth, ys_smooth = xs_smooth[keep], ys_smooth[keep]
+
+            if len(xs_smooth) >= 2:
+                # Create interpolator for smooth line
+                interpolator = PchipInterpolator(xs_smooth, ys_smooth, extrapolate=True)
+                # Generate smooth curve for plotting
+                x_plot = np.linspace(log_means[mask].min(), log_means[mask].max(), 100)
+                y_plot = interpolator(x_plot)
+            else:
+                x_plot, y_plot = None, None
+        except (ValueError, np.linalg.LinAlgError):
+            x_plot, y_plot = None, None
+    else:
+        x_plot, y_plot = None, None
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=300, layout="constrained")
+
+    # Plot non-HVGs (rest)
+    ax.scatter(
+        log_means[~hvg_mask],
+        log_vars[~hvg_mask],
+        color="tab:blue",
+        alpha=0.4,
+        marker=".",
+        label="Rest",
+        # rasterized=True,  # Rasterize for smaller file size
+    )
+
+    # Plot HVGs
+    ax.scatter(
+        log_means[hvg_mask],
+        log_vars[hvg_mask],
+        color="tab:green",
+        alpha=0.4,
+        marker="+",
+        label="HVGs",
+        # rasterized=True,
+    )
+
+    # Plot trend line if available
+    if x_plot is not None:
+        ax.plot(
+            x_plot,
+            y_plot,
+            color="tab:orange",
+            alpha=0.9,
+            linewidth=2,
+            label=r"$f(\log(\mu))$",
+        )
+
+    ax.set_xlabel("log(gene mean)")
+    ax.set_ylabel("log(gene variance)")
+    ax.set_title(f"Top {n_top_genes} Highly Variable Genes")
+    ax.spines[["right", "top"]].set_visible(False)
+    ax.legend()
+
+    # Save figure
+    save_path = dump_to / f"{file.stem}.png"
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved HVG plot to {save_path}")
+
+
+@beartype.beartype
+def solo_hvgs(
     h5: pathlib.Path,
     dump_to: pathlib.Path,
     order: tp.Literal["rows", "cols", None] = None,
@@ -52,10 +192,6 @@ def save_cell_weights(
 
     n_cells, n_genes = adata.shape
 
-    weighted_g = np.zeros((n_genes,), dtype=np.float64)
-    squared_g = np.zeros((n_genes,), dtype=np.float64)
-    det_g = np.zeros((n_genes,), dtype=np.int64)
-
     info = describe_layout(adata.X)
     if order is None:
         if info["recommended_stream"] is None:
@@ -75,52 +211,21 @@ def save_cell_weights(
     assert order is not None
 
     if order == "rows":
-        for start, end in vcell.helpers.progress(
-            vcell.helpers.batched_idx(n_cells, batch_size)
-        ):
-            x_bg = adata.X[start:end]
-            if hasattr(x_bg, "toarray"):
-                x_bg = x_bg.toarray()
-            sum_b = x_bg.sum(axis=1)
-            weight_b = target_sum / np.maximum(sum_b, 1.0)
-            weighted_bg = weight_b[:, None] * x_bg
-            weighted_g += weighted_bg.sum(axis=0)
-            squared_g += (weighted_bg * weighted_bg).sum(axis=0)
-            det_g += (x_bg > 0).sum(axis=0)
-
+        hvgs = vcell.pp.highly_variable_genes_seurat_v3_rows(adata, n_top_genes=2_000)
     elif order == "cols":
-        # Compute the per-gene statistics needed for Seurat v3–style HVG selection on huge, file-backed matrices by streaming columns. Given raw counts X, it makes two passes: (1) compute per-cell library sizes to get CP10K weights w_i; (2) accumulate, for each gene g, \sum_i w_i X_ig, sum_i (w_i X_ig)^2 and detection counts. These O(G)-memory aggregates yield mu_g and var_g to fit the log mean–variance trend and rank HVGs, without ever loading all of X into RAM. We prefer CSC.
-        sizes_n = np.zeros(n_cells, dtype=np.float64)
-        for start, end in vcell.helpers.progress(
-            vcell.helpers.batched_idx(n_genes, batch_size), desc="sizes"
-        ):
-            sizes_n += np.asarray(adata.X[:, start:end].sum(axis=1)).squeeze()
-
-        sizes_n = np.maximum(sizes_n, 1.0)  # guard against empty cells
-        weights_n = (target_sum / sizes_n).astype(np.float64)
-
-        for start, end in vcell.helpers.progress(
-            vcell.helpers.batched_idx(n_genes, batch_size), desc="moments"
-        ):
-            x_ng = adata.X[:, start:end].copy()
-            x_ng.data *= weights_n[x_ng.indices]
-            weighted_g[start:end] += np.asarray(x_ng.sum(axis=0)).squeeze()
-            x_ng.data **= 2
-            squared_g[start:end] += np.asarray(x_ng.sum(axis=0)).squeeze()
-            det_g[start:end] += np.diff(adata.X[:, start:end].indptr)
-
+        hvgs = vcell.pp.highly_variable_genes_seurat_v3_cols(adata, n_top_genes=2_000)
     else:
         tp.assert_never(order)
 
-    arrs = dict(
-        weighted_g=weighted_g,
-        squared_g=squared_g,
-        det_g=det_g,
-        n_cells=n_cells,
-        n_genes=n_genes,
-    )
     dump_to.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(dump_to / f"{h5.stem}.npz", allow_pickle=False, **arrs)
+
+    # Save HVG results as JSON
+    json_path = dump_to / f"{h5.stem}.json"
+    hvgs.to_json(json_path, orient="index")
+    print(f"Saved HVG results to {json_path}")
+
+    # Create and save visualization
+    plot_hvgs(json_path, dump_to, n_top_genes=2_000)
 
 
 def describe_layout(x):
@@ -257,6 +362,6 @@ def describe_layout(x):
 
 if __name__ == "__main__":
     tyro.extras.subcommand_cli_from_dict({
-        "save-cell-weights": save_cell_weights,
-        "nothing": lambda: None,
+        "solo-hvgs": solo_hvgs,
+        "plot-hvgs": plot_hvgs,
     })

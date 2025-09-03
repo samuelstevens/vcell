@@ -9,7 +9,7 @@ import pandas as pd
 import scipy.interpolate
 import statsmodels.nonparametric.smoothers_lowess
 
-import vcell.helpers
+from .. import helpers
 
 
 def _compute_seurat_v3_variances(
@@ -59,7 +59,7 @@ def _compute_seurat_v3_variances(
         # Remove near-duplicate x values for interpolation
         keep = np.concatenate(([True], np.diff(xs_smooth) > 1e-12))
         xs_smooth, ys_smooth = xs_smooth[keep], ys_smooth[keep]
-        
+
         # Check if we have enough points after deduplication
         if len(xs_smooth) < 2:
             # Not enough unique points for interpolation
@@ -81,10 +81,6 @@ def _compute_seurat_v3_variances(
     # Scanpy uses clipping and additional normalization
     std_factor = 10**expected_log_vars
     std_factor = np.sqrt(std_factor)
-
-    # Clip as in Seurat (using sqrt(n) as max standardization)
-    vmax = np.sqrt(n_cells)
-    clip_val = std_factor * vmax + means_raw[mask]
 
     # Compute standardized variance
     # This is a simplified version - the actual Seurat v3 does more complex clipping
@@ -122,9 +118,15 @@ def highly_variable_genes_seurat_v3_rows(
     weighted_g = np.zeros((n_genes,), dtype=np.float64)
     squared_g = np.zeros((n_genes,), dtype=np.float64)
     det_g = np.zeros((n_genes,), dtype=np.int64)
+    means_raw_g = np.zeros(n_genes, dtype=np.float64)
+
+    # Also need raw squared sums for raw variance
+    raw_squared_g = np.zeros(n_genes, dtype=np.float64)
 
     # Stream through rows (cells)
-    for start, end in vcell.helpers.batched_idx(n_cells, batch_size):
+    for start, end in helpers.progress(
+        helpers.batched_idx(n_cells, batch_size), desc="rows"
+    ):
         x_bg = X[start:end]
         if hasattr(x_bg, "toarray"):
             x_bg = x_bg.toarray()
@@ -134,16 +136,9 @@ def highly_variable_genes_seurat_v3_rows(
         weighted_g += weighted_bg.sum(axis=0)
         squared_g += (weighted_bg * weighted_bg).sum(axis=0)
         det_g += (x_bg > 0).sum(axis=0)
-
-    # Compute statistics
-    # Note: Seurat v3 uses raw means, not normalized means
-    means_raw = np.zeros(n_genes, dtype=np.float64)
-    for start, end in vcell.helpers.batched_idx(n_cells, batch_size):
-        x_bg = X[start:end]
-        if hasattr(x_bg, "toarray"):
-            x_bg = x_bg.toarray()
-        means_raw += x_bg.sum(axis=0)
-    means_raw /= n_cells
+        means_raw_g += x_bg.sum(axis=0)
+        raw_squared_g += (x_bg * x_bg).sum(axis=0)  # Raw squared values
+    means_raw_g /= n_cells
 
     # Compute CP10K variance
     means_norm = weighted_g / n_cells
@@ -155,7 +150,7 @@ def highly_variable_genes_seurat_v3_rows(
 
     # Compute Seurat v3 standardized variances
     variances, variances_norm = _compute_seurat_v3_variances(
-        means_raw, variances_cp10k, n_cells, span
+        means_raw_g, variances_cp10k, n_cells, span
     )
 
     # Select top genes
@@ -165,10 +160,17 @@ def highly_variable_genes_seurat_v3_rows(
         highly_variable[top_indices] = True
 
     # Create DataFrame
+    # Note: For plotting we need raw variances, not CP10K normalized
+    # Compute raw variances from the raw data
+    variances_raw = (raw_squared_g / n_cells) - (means_raw_g**2)
+    variances_raw = np.maximum(variances_raw, 0)
+    if n_cells > 1:
+        variances_raw = variances_raw * n_cells / (n_cells - 1)
+
     result = pd.DataFrame(
         {
-            "means": means_raw,
-            "variances": variances,
+            "means": means_raw_g,
+            "variances": variances_raw,  # Raw variances for plotting
             "variances_norm": variances_norm,
             "highly_variable": highly_variable,
         },
@@ -206,7 +208,7 @@ def highly_variable_genes_seurat_v3_cols(
 
     # First pass: compute library sizes
     sizes_n = np.zeros(n_cells, dtype=np.float64)
-    for start, end in vcell.helpers.batched_idx(n_genes, batch_size):
+    for start, end in helpers.batched_idx(n_genes, batch_size):
         sizes_n += np.asarray(X[:, start:end].sum(axis=1)).squeeze()
 
     sizes_n = np.maximum(sizes_n, 1.0)  # guard against empty cells
@@ -214,14 +216,20 @@ def highly_variable_genes_seurat_v3_cols(
 
     # Second pass: compute weighted statistics and raw means
     means_raw = np.zeros(n_genes, dtype=np.float64)
-    for start, end in vcell.helpers.batched_idx(n_genes, batch_size):
+    raw_squared_g = np.zeros(n_genes, dtype=np.float64)
+    for start, end in helpers.batched_idx(n_genes, batch_size):
         x_ng = X[:, start:end].copy()
 
         # Handle both sparse and dense
         if hasattr(x_ng, "toarray"):
             # Sparse matrix
-            # Compute raw means before normalization
-            means_raw[start:end] = np.asarray(x_ng.sum(axis=0)).squeeze() / n_cells
+            # Compute raw means and raw squared sums before normalization
+            raw_sum = np.asarray(x_ng.sum(axis=0)).squeeze()
+            means_raw[start:end] = raw_sum / n_cells
+            # Raw squared sum (before normalization)
+            x_ng_raw = X[:, start:end].copy()
+            x_ng_raw.data **= 2
+            raw_squared_g[start:end] = np.asarray(x_ng_raw.sum(axis=0)).squeeze()
             # Now apply normalization for variance computation
             x_ng.data *= weights_n[x_ng.indices]
             weighted_g[start:end] += np.asarray(x_ng.sum(axis=0)).squeeze()
@@ -235,6 +243,7 @@ def highly_variable_genes_seurat_v3_cols(
         else:
             # Dense matrix
             means_raw[start:end] = x_ng.sum(axis=0) / n_cells
+            raw_squared_g[start:end] = (x_ng**2).sum(axis=0)
             x_ng_weighted = x_ng * weights_n[:, None]
             weighted_g[start:end] += x_ng_weighted.sum(axis=0)
             squared_g[start:end] += (x_ng_weighted**2).sum(axis=0)
@@ -260,10 +269,16 @@ def highly_variable_genes_seurat_v3_cols(
         highly_variable[top_indices] = True
 
     # Create DataFrame
+    # Compute raw variances for plotting
+    variances_raw = (raw_squared_g / n_cells) - (means_raw**2)
+    variances_raw = np.maximum(variances_raw, 0)
+    if n_cells > 1:
+        variances_raw = variances_raw * n_cells / (n_cells - 1)
+
     result = pd.DataFrame(
         {
             "means": means_raw,
-            "variances": variances,
+            "variances": variances_raw,  # Raw variances for plotting
             "variances_norm": variances_norm,
             "highly_variable": highly_variable,
         },

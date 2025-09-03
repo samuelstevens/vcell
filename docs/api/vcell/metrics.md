@@ -28,7 +28,7 @@ Functions
       mae: [...]  (one scalar per leading example/perturbation index)
 
 `compute_pds(pred: jaxtyping.Float[Array, 'p g'], true: jaxtyping.Float[Array, 'p g'], *, topk: tuple[int, ...] = (1, 5, 10)) ‑> dict[str, jaxtyping.Float[Array, '']]`
-:   Perturbation Discrimination Score (skeleton).
+:   Perturbation Discrimination Score.
     
     Intent:
       For each perturbation i, rank true profiles by distance to pred[i].

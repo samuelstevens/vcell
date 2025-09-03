@@ -7,13 +7,11 @@ import warnings
 import anndata as ad
 import hypothesis.strategies as st
 import numpy as np
-import pytest
 import scanpy as sc
 import scipy.sparse as sp
 from hypothesis import given, settings
 
 import vcell.pp
-
 
 # ==============================================================================
 # Basic functionality tests
@@ -60,8 +58,6 @@ def test_hvg_methods_match():
     )
     reference_hvgs = adata_dense.var["highly_variable"].values
     reference_means = adata_dense.var["means"].values
-    reference_variances = adata_dense.var["variances"].values
-    reference_variances_norm = adata_dense.var["variances_norm"].values
 
     # Run our row-streaming implementation (good for CSR)
     result_rows = vcell.pp.highly_variable_genes_seurat_v3_rows(
@@ -107,20 +103,20 @@ def test_hvg_methods_match():
     # The important thing is that we identify similar highly variable genes.
 
     # Check that variances are computed (non-negative)
-    assert np.all(
-        result_rows["variances"].values >= 0
-    ), "Row variances should be non-negative"
-    assert np.all(
-        result_cols["variances"].values >= 0
-    ), "Col variances should be non-negative"
+    assert np.all(result_rows["variances"].values >= 0), (
+        "Row variances should be non-negative"
+    )
+    assert np.all(result_cols["variances"].values >= 0), (
+        "Col variances should be non-negative"
+    )
 
     # Check that normalized variances are computed
-    assert not np.all(
-        result_rows["variances_norm"].values == 0
-    ), "Row normalized variances shouldn't all be zero"
-    assert not np.all(
-        result_cols["variances_norm"].values == 0
-    ), "Col normalized variances shouldn't all be zero"
+    assert not np.all(result_rows["variances_norm"].values == 0), (
+        "Row normalized variances shouldn't all be zero"
+    )
+    assert not np.all(result_cols["variances_norm"].values == 0), (
+        "Col normalized variances shouldn't all be zero"
+    )
 
     # Check that the same genes are selected as highly variable
     # Since our implementation is simplified, we allow more variance
@@ -188,9 +184,9 @@ def test_all_genes_identical():
     assert result["highly_variable"].sum() == 5
     # All genes should have same variance_norm (within numerical precision)
     var_norms = result["variances_norm"].values
-    assert np.allclose(
-        var_norms, var_norms[0]
-    ), "All identical genes should have same variance_norm"
+    assert np.allclose(var_norms, var_norms[0]), (
+        "All identical genes should have same variance_norm"
+    )
 
 
 def test_extremely_sparse_matrix():
@@ -264,9 +260,9 @@ def test_all_zero_variance():
     # small residuals due to numerical precision and the trend fitting process.
     # The important thing is that the selection is arbitrary but deterministic.
     # Check that variance_norm values are small (near the trend line)
-    assert (
-        np.std(result["variances_norm"].values) < 1.0
-    ), "Variance norms should have low spread when all genes have zero variance"
+    assert np.std(result["variances_norm"].values) < 1.0, (
+        "Variance norms should have low spread when all genes have zero variance"
+    )
 
 
 def test_nan_handling():
@@ -369,6 +365,7 @@ def test_empty_matrix_handling():
 # ==============================================================================
 # Property-based tests using Hypothesis
 # ==============================================================================
+
 
 # Strategy for generating count matrices
 @st.composite
@@ -572,9 +569,9 @@ def test_zero_gene_handling(n_obs, n_vars):
 
     # Zero genes should have zero mean
     for gene_idx in zero_genes:
-        assert (
-            result["means"].iloc[gene_idx] == 0
-        ), f"Zero gene {gene_idx} has non-zero mean"
+        assert result["means"].iloc[gene_idx] == 0, (
+            f"Zero gene {gene_idx} has non-zero mean"
+        )
 
 
 # Property 7: Constant gene handling
@@ -611,9 +608,9 @@ def test_constant_gene_handling(n_obs, n_vars, constant_value):
     const_selected = np.sum(result.iloc[const_genes]["highly_variable"].values)
 
     # At most 1 constant gene should be selected (allowing for edge cases)
-    assert (
-        const_selected <= 1
-    ), f"{const_selected}/{len(const_genes)} constant genes were selected as HVGs"
+    assert const_selected <= 1, (
+        f"{const_selected}/{len(const_genes)} constant genes were selected as HVGs"
+    )
 
 
 # Property 8: Monotonic selection

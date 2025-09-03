@@ -13,6 +13,7 @@
 - Only use `setup` for naming functions that don't return anything.
 
 - You can use `gh` to access issues and PRs on GitHub to gather more context. We use GitHub issues a lot to share ideas and communicate about problems, so you should almost always check to see if there's a relevant GitHub issue for whatever you're working on.
+- Write single-line commit messages; never say you co-authored a commit.
 
 # Tensor Variables
 
@@ -39,6 +40,7 @@ For example, an batched activation tensor with shape (batch, d_model) is `x_bd`.
 - Only use `setup` for naming functions that don't return anything.
 
 - You can use `gh` to access issues and PRs on GitHub to gather more context. We use GitHub issues a lot to share ideas and communicate about problems, so you should almost always check to see if there's a relevant GitHub issue for whatever you're working on.
+- Write single-line commit messages; never say you co-authored a commit.
 
 # Tensor Variables
 
@@ -189,6 +191,99 @@ Please decorate every function with it.
 .. include:: tpu-tricks.md
 """
 
+>>>> current-issue.md
+# Issue #31: Compute per-dataset highly-variable genes (HVGs)
+
+## Issue Description
+Compute highly-variable genes for each dataset using Seurat v3 method, saving 2000 HVGs per dataset to enable downstream global HVG basis construction.
+
+## Technical Requirements
+1. Ensure raw counts, not log-normalized data
+2. Use Seurat v3 variant: `scanpy.pp.highly_variable_genes(flavor="seurat_v3", n_top_genes=2000, layer="counts", batch_key if present)`
+3. Handle large file-backed datasets efficiently (e.g., KOLF dataset)
+4. Leverage column-wise access for performance on large datasets
+5. Save outputs:
+   - `hvgs_2k.txt`: List of 2000 highly variable gene names
+   - `hvg_scores.json`: Scores/statistics for each gene (means, variances, variances_norm)
+
+## Context in Pipeline
+This issue is part of a larger HVG-based modeling pipeline:
+1. **Issue #31 (current)**: Compute HVGs per dataset → outputs per-dataset HVG lists and scores
+2. **Issue #32**: Build global HVG basis from per-dataset HVGs → creates unified 2k gene list
+3. **Issue #33**: Normalize datasets consistently (CP10K + log1p) 
+4. **Issue #36**: Implement transformer for the HVGs
+5. **Issue #34**: Multi-source DataLoader for training
+
+The HVGs are critical for dimensionality reduction - focusing the model on the most informative genes across datasets.
+
+## Current Implementation Status
+✅ **Completed:**
+- Implemented `highly_variable_genes_seurat_v3_rows()` and `highly_variable_genes_seurat_v3_cols()` in `src/vcell/pp/hvgs.py`
+- Functions handle both row-major (CSR) and column-major (CSC) sparse matrices efficiently
+- Memory-efficient streaming implementation for file-backed datasets
+- ~94% overlap with scanpy's reference implementation (acceptable tradeoff for memory efficiency)
+- Comprehensive test suite with 22 tests including property-based testing
+- Edge case handling (single cell, empty matrices, NaN values, etc.)
+- Variance stabilization using lowess fitting (simplified from scanpy's loess)
+
+## Completion Criteria for Senior Review
+
+To convince a senior co-worker this issue is truly complete, we need:
+
+### 1. ✅ Core Algorithm Implementation
+- [x] Seurat v3 HVG selection with variance stabilizing transformation
+- [x] Row-major and column-major streaming implementations
+- [x] ~94% accuracy vs scanpy (documented tradeoff)
+- [x] Comprehensive test coverage
+
+### 2. 🔄 Performance Optimization (In Progress)
+- [ ] Minimize number of passes over data (currently 2 passes)
+- [ ] Benchmark on actual large datasets (KOLF)
+- [ ] Memory profiling to ensure file-backed efficiency
+- [ ] Document performance characteristics
+
+### 3. ⏳ Production Pipeline Integration
+- [ ] Script to process all datasets in config files
+- [ ] Output formatting:
+  - [ ] `hvgs_2k.txt` with gene names (one per line)
+  - [ ] `hvg_scores.json` with full statistics
+- [ ] Error handling for malformed/missing data
+- [ ] Logging and progress reporting
+- [ ] Handle batch_key parameter if present in dataset
+
+### 4. ⏳ Dataset Processing
+- [ ] Process all scPerturb datasets (K562_essential, K562_gwps, HepG2, Jurkat)
+- [ ] Process VCC training data
+- [ ] Process KOLF dataset (large, column-optimized)
+- [ ] Verify outputs are consistent across datasets
+
+### 5. ⏳ Documentation & Validation
+- [ ] Document expected runtime for each dataset
+- [ ] Validate HVG selections make biological sense
+- [ ] Compare with known HVGs from literature if available
+- [ ] Document any dataset-specific considerations
+
+## Remaining Work
+
+1. **Immediate (Today):**
+   - Create production script using our HVG functions to process datasets
+   - Implement output saving (hvgs_2k.txt and hvg_scores.json)
+   - Add batch_key support if needed
+
+2. **Performance (Priority):**
+   - Analyze current data access patterns
+   - Reduce from 2 passes to 1 if possible
+   - Benchmark on KOLF dataset
+
+3. **Integration:**
+   - Process all datasets from configs
+   - Verify outputs feed correctly into Issue #32 (global HVG basis)
+
+## Success Metrics
+- All datasets processed without memory errors
+- KOLF processing completes in reasonable time (<2 hours)
+- Output files correctly formatted for downstream pipeline
+- HVG selections are biologically sensible (housekeeping genes not overrepresented)
 >>>> data/__init__.py
 from .naive_dataloader import Config as PerturbationConfig
 from .naive_dataloader import PerturbationDataloader
@@ -196,11 +291,11 @@ from .naive_dataloader import PerturbationDataloader
 __all__ = ["PerturbationConfig", "PerturbationDataloader"]
 
 >>>> data/harmonize.py
+# src/vcell/data/harmonize.py
 import collections
 import dataclasses
 import pathlib
 import re
-import typing as tp
 
 import anndata as ad
 import beartype
@@ -242,8 +337,8 @@ class GeneVocab:
     - Keeps symbols for unique-only fallback.
     """
 
-    def __init__(self, vcc_h5ad: str):
-        vcc = sc.read(vcc_h5ad, backed="r")
+    def __init__(self, vcc_h5ad: str | pathlib.Path):
+        vcc = sc.read(str(vcc_h5ad), backed="r")
         if "gene_id" not in vcc.var.columns:
             raise ValueError(
                 "Expected VCC .var to contain a 'gene_id' column (Ensembl)."
@@ -251,7 +346,7 @@ class GeneVocab:
 
         self.n_genes = vcc.n_vars
 
-        self.vcc_ens: list[str] = [_strip_ens_version(s) for s in vcc.var["gene_id"]]
+        self.vcc_ens: list[str] = [strip_ens_version(s) for s in vcc.var["gene_id"]]
         self.vcc_sym: list[str] = vcc.var.index.astype(str).tolist()
 
         # Ensembl -> VCC index (unique by construction)
@@ -261,35 +356,13 @@ class GeneVocab:
         for i, s in enumerate(self.vcc_sym):
             self._sym_to_idxs[s].append(i)
 
-    def make_map(
-        self, ds: ad.AnnData, dup_mode: tp.Literal["sum", "keep", None] = None
-    ) -> GeneMap:
+    def make_map(self, ds: ad.AnnData, *, gene_id_col: str = "ensembl_id") -> GeneMap:
         """
         Create a GeneMap from a dataset.
         """
 
-        if dup_mode is None:
-            # Try to figure out whether we have raw counts (integers) or log-normalized counts (floats, smaller).
-            row = ds.X[0]
-            row = row.toarray() if hasattr(row, "toarray") else np.asarray(row)
-            if row.max() > 100:
-                # Probably raw counts
-                dup_mode = "sum"
-            elif row[row > 1].min() < 2.0:
-                dup_mode = "keep"
-            else:
-                if ds.isbacked:
-                    self.logger.warning(
-                        "Not sure whether ds '%s' is raw counts or log normalized.",
-                        ds.filename,
-                    )
-                else:
-                    self.logger.warning(
-                        "Not sure whether ds is raw counts or log normalized."
-                    )
-
         ds_sym = list(ds.var_names)
-        ds_ens = [_strip_ens_version(s) for s in ds.var["ensembl_id"].tolist()]
+        ds_ens = [strip_ens_version(s) for s in ds.var[gene_id_col].tolist()]
 
         assert len(ds_sym) == len(ds_ens)
 
@@ -341,80 +414,9 @@ class GeneVocab:
 
 
 @beartype.beartype
-def _strip_ens_version(s: str) -> str:
+def strip_ens_version(s: str) -> str:
     """ENSG00000187634.5 -> ENSG00000187634"""
     return re.sub(r"\.\d+$", "", s)
-
-
-@beartype.beartype
-class Dataloader:
-    def __init__(self, vcc_a5hd_path: pathlib.Path, scperturb_a5hd_path: pathlib.Path):
-        self.gene_vocab = GeneVocab(vcc_a5hd_path)
-        self.sc_adata = sc.read(scperturb_a5hd_path, backed="r")
-        self.gene_map = self.gene_vocab.make_map(self.sc_adata)
-
-        unique_perts = self.sc_adata.obs[self.pert_col].unique()
-        self.pert2id = {pert: i for i, pert in enumerate(sorted(unique_perts))}
-
-    def __iter__(self) -> collections.abc.Iterator[dict]:
-        pool = []
-        # Randomly sample from the pool
-        while True:
-            if not pool:
-                # If pool is empty, regenerate it
-                pool = self.adata.obs.get_columns(self.pert_col).to_list()
-
-            # Randomly select a combination
-            idx = self.rng.integers(0, len(pool))
-            pert = pool.pop(idx)
-
-            # Get perturbed cells for this combination
-            pert_mask = self.adata.obs[self.cfg.pert_col] == pert
-            pert_indices = np.where(pert_mask)[0]
-
-            # Skip if not enough perturbed cells
-            if len(pert_indices) < self.cfg.set_size:
-                self.logger.debug(
-                    "Skipping (%s, %s) with only %d indices.",
-                    cell_line,
-                    pert,
-                    len(pert_indices),
-                )
-                continue
-
-            # Just match cell line for controls
-            control_mask = (self.adata.obs[self.cfg.cell_line_col] == cell_line) & (
-                self.adata.obs[self.cfg.pert_col] == self.cfg.control_code
-            )
-            control_indices = np.where(control_mask)[0]
-
-            # Skip if no control cells available
-            if len(control_indices) == 0:
-                self.logger.debug(
-                    "Skipping (%s, %s) (no control cells).", cell_line, pert
-                )
-                continue
-
-            # Sample perturbed cells
-            sampled_pert_indices = self.rng.choice(
-                pert_indices, size=self.cfg.set_size, replace=False
-            )
-
-            # Sample control cells (with replacement if needed)
-            sampled_control_indices = self.rng.choice(
-                control_indices, size=self.cfg.set_size, replace=True
-            )
-
-            # Get the expression data
-            control_data = self._get_cell_data(sampled_control_indices.tolist())
-            target_data = self._get_cell_data(sampled_pert_indices.tolist())
-
-            yield {
-                "control": control_data,
-                "target": target_data,
-                "pert": self.pert2id[pert],
-                "cell_line": self.cline2id[cell_line],
-            }
 
 >>>> data/naive_dataloader.py
 # src/vcell/data/naive_dataloader.py
@@ -613,10 +615,12 @@ class PerturbationDataloader:
 >>>> helpers.py
 # src/vcell/helpers.py
 import collections.abc
+import dataclasses
 import logging
 import pathlib
 import subprocess
 import time
+import typing as tp
 
 import beartype
 
@@ -737,6 +741,91 @@ def current_git_commit() -> str | None:
         return result.stdout.strip() or None
     except (FileNotFoundError, subprocess.CalledProcessError):
         return None
+
+
+@beartype.beartype
+def dict_to_dataclass(data: dict, cls: type) -> tp.Any:
+    """Recursively convert a dictionary to a dataclass instance."""
+    if not dataclasses.is_dataclass(cls):
+        return data
+
+    field_types = {f.name: f.type for f in dataclasses.fields(cls)}
+    kwargs = {}
+
+    for field_name, field_type in field_types.items():
+        if field_name not in data:
+            continue
+
+        value = data[field_name]
+
+        # Handle Optional types
+        origin = tp.get_origin(field_type)
+        args = tp.get_args(field_type)
+
+        # Handle tuple[str, ...]
+        if origin is tuple and args:
+            kwargs[field_name] = tuple(value) if isinstance(value, list) else value
+        # Handle list[DataclassType]
+        elif origin is list and args and dataclasses.is_dataclass(args[0]):
+            kwargs[field_name] = [dict_to_dataclass(item, args[0]) for item in value]
+        # Handle regular dataclass fields
+        elif dataclasses.is_dataclass(field_type):
+            kwargs[field_name] = dict_to_dataclass(value, field_type)
+        # Handle pathlib.Path
+        elif field_type is pathlib.Path or (
+            origin is tp.Union and pathlib.Path in args
+        ):
+            kwargs[field_name] = pathlib.Path(value) if value is not None else value
+        else:
+            kwargs[field_name] = value
+
+    return cls(**kwargs)
+
+
+@beartype.beartype
+def get_non_default_values(obj: tp.Any, default_obj: tp.Any) -> dict:
+    """Recursively find fields that differ from defaults."""
+    obj_dict = dataclasses.asdict(obj)
+    default_dict = dataclasses.asdict(default_obj)
+
+    diff = {}
+    for key, value in obj_dict.items():
+        default_value = default_dict.get(key)
+        if value != default_value:
+            diff[key] = value
+
+    return diff
+
+
+@beartype.beartype
+def merge_configs(base: tp.Any, overrides: dict) -> tp.Any:
+    """Recursively merge override values into a base config."""
+    if not overrides:
+        return base
+
+    base_dict = dataclasses.asdict(base)
+
+    for key, value in overrides.items():
+        if key in base_dict:
+            # For nested dataclasses, merge recursively
+            if isinstance(value, dict) and dataclasses.is_dataclass(getattr(base, key)):
+                base_dict[key] = dataclasses.asdict(
+                    merge_configs(getattr(base, key), value)
+                )
+            else:
+                base_dict[key] = value
+
+    return dict_to_dataclass(base_dict, type(base))
+
+
+def check_grain_ops(ops: list[object]):
+    import cloudpickle
+
+    for op in ops:
+        try:
+            cloudpickle.dumps(op)
+        except TypeError as err:
+            raise AssertionError(f"Failed to pickle {op}: {err}")
 
 >>>> install-gcloud.md
 ## Install `gcloud`
@@ -942,7 +1031,7 @@ def compute_pds(
     *,
     topk: tuple[int, ...] = (1, 5, 10),
 ) -> dict[str, Float[Array, ""]]:
-    """Perturbation Discrimination Score (skeleton).
+    """Perturbation Discrimination Score.
 
     Intent:
       For each perturbation i, rank true profiles by distance to pred[i].
@@ -1045,6 +1134,364 @@ def mmd2_energy_kernel(
     k_pt = -d_pt
     mmd2 = (k_pp.sum() + k_tt.sum() - 2.0 * k_pt.sum()) / (s * s)
     return mmd2
+
+>>>> nn/optim.py
+import dataclasses
+import typing as tp
+
+import beartype
+import optax
+
+
+@beartype.beartype
+@dataclasses.dataclass(frozen=True)
+class Config:
+    alg: tp.Literal["sgd", "adam", "adamw"] = "adam"
+    """Optimizer algorithm."""
+    learning_rate: float = 3e-4
+    """Learning rate."""
+    grad_clip: float = 1.0
+    """Maximum gradient norm."""
+
+
+@beartype.beartype
+def make(cfg: Config):
+    if cfg.alg == "sgd":
+        optim = optax.sgd(learning_rate=cfg.learning_rate)
+    elif cfg.alg == "adam":
+        optim = optax.adam(learning_rate=cfg.learning_rate)
+    elif cfg.alg == "adamw":
+        optim = optax.adamw(learning_rate=cfg.learning_rate)
+    else:
+        tp.assert_never(cfg.alg)
+
+    if cfg.grad_clip > 0:
+        optim = optax.chain(optax.clip_by_global_norm(cfg.grad_clip), optim)
+
+    return optim
+
+>>>> pp/__init__.py
+"""
+Preprocessing functions for single-cell data.
+"""
+
+from .hvgs import (
+    highly_variable_genes_seurat_v3_cols,
+    highly_variable_genes_seurat_v3_rows,
+)
+
+__all__ = [
+    "highly_variable_genes_seurat_v3_cols",
+    "highly_variable_genes_seurat_v3_rows",
+]
+
+>>>> pp/hvgs.py
+"""
+Highly variable gene selection methods.
+"""
+
+import anndata as ad
+import beartype
+import numpy as np
+import pandas as pd
+import scipy.interpolate
+import statsmodels.nonparametric.smoothers_lowess
+
+from .. import helpers
+
+
+def _compute_seurat_v3_variances(
+    means_raw: np.ndarray,
+    variances_cp10k: np.ndarray,
+    n_cells: int,
+    span: float = 0.3,
+    eps: float = 1e-12,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute Seurat v3 standardized variances using lowess fitting.
+
+    This implements the variance stabilizing transformation (VST) from Seurat v3.
+    Instead of using loess like scanpy, we use lowess which is simpler but similar.
+
+    Returns:
+        variances: Standardized variances (residuals from the trend)
+        variances_norm: Normalized variances used for ranking
+    """
+    # Filter to genes with non-zero variance to avoid log(0)
+    mask = variances_cp10k > 0
+    if not mask.any() or mask.sum() < 3:
+        # All genes have zero variance or too few genes for fitting
+        # Return simple standardized variances without trend fitting
+        return variances_cp10k, np.zeros_like(means_raw)
+
+    # Work in log space
+    log_means = np.log10(means_raw[mask] + eps)
+    log_vars = np.log10(variances_cp10k[mask] + eps)
+
+    # Sort for lowess fitting
+    order = np.argsort(log_means)
+    x_sorted = log_means[order]
+    y_sorted = log_vars[order]
+
+    # Fit lowess with robustifying iterations
+    try:
+        smooth = statsmodels.nonparametric.smoothers_lowess.lowess(
+            endog=y_sorted,
+            exog=x_sorted,
+            frac=span,
+            it=3,  # Robust iterations to downweight outliers
+            return_sorted=True,
+        )
+        xs_smooth, ys_smooth = smooth[:, 0], smooth[:, 1]
+
+        # Remove near-duplicate x values for interpolation
+        keep = np.concatenate(([True], np.diff(xs_smooth) > 1e-12))
+        xs_smooth, ys_smooth = xs_smooth[keep], ys_smooth[keep]
+
+        # Check if we have enough points after deduplication
+        if len(xs_smooth) < 2:
+            # Not enough unique points for interpolation
+            return variances_cp10k, np.zeros_like(means_raw)
+    except (ValueError, np.linalg.LinAlgError):
+        # Lowess fitting failed, return simple variances
+        return variances_cp10k, np.zeros_like(means_raw)
+
+    # Create interpolator for prediction
+    interpolator = scipy.interpolate.PchipInterpolator(
+        xs_smooth, ys_smooth, extrapolate=True
+    )
+
+    # Predict expected log variance for all genes
+    expected_log_vars = interpolator(log_means)
+
+    # Compute standardized variances (in original scale)
+    # This is simplified from scanpy's full implementation
+    # Scanpy uses clipping and additional normalization
+    std_factor = 10**expected_log_vars
+    std_factor = np.sqrt(std_factor)
+
+    # Compute standardized variance
+    # This is a simplified version - the actual Seurat v3 does more complex clipping
+    variances_standardized = np.zeros_like(means_raw)
+    variances_standardized[mask] = variances_cp10k[mask] / (std_factor**2)
+
+    # For normalized variances used in ranking, compute residuals in log space
+    variances_norm = np.zeros_like(means_raw)
+    variances_norm[mask] = log_vars - expected_log_vars
+
+    return variances_standardized, variances_norm
+
+
+@beartype.beartype
+def highly_variable_genes_seurat_v3_rows(
+    adata: ad.AnnData,
+    *,
+    n_top_genes: int | None = None,
+    layer: str | None = None,
+    batch_size: int = 2048,
+    target_sum: float = 10_000,
+    span: float = 0.3,
+) -> pd.DataFrame:
+    """
+    Compute Seurat v3 HVGs by streaming rows (cells). Efficient for CSR/row-major data.
+
+    Returns DataFrame with 'means', 'variances', 'variances_norm', 'highly_variable'.
+    """
+    n_cells, n_genes = adata.shape
+
+    # Get data matrix
+    X = adata.layers[layer] if layer else adata.X
+
+    # Initialize accumulators
+    weighted_g = np.zeros((n_genes,), dtype=np.float64)
+    squared_g = np.zeros((n_genes,), dtype=np.float64)
+    det_g = np.zeros((n_genes,), dtype=np.int64)
+    means_raw_g = np.zeros(n_genes, dtype=np.float64)
+
+    # Also need raw squared sums for raw variance
+    raw_squared_g = np.zeros(n_genes, dtype=np.float64)
+
+    # Stream through rows (cells)
+    for start, end in helpers.progress(
+        helpers.batched_idx(n_cells, batch_size), desc="rows"
+    ):
+        x_bg = X[start:end]
+        if hasattr(x_bg, "toarray"):
+            x_bg = x_bg.toarray()
+        sum_b = x_bg.sum(axis=1)
+        weight_b = target_sum / np.maximum(sum_b, 1.0)
+        weighted_bg = weight_b[:, None] * x_bg
+        weighted_g += weighted_bg.sum(axis=0)
+        squared_g += (weighted_bg * weighted_bg).sum(axis=0)
+        det_g += (x_bg > 0).sum(axis=0)
+        means_raw_g += x_bg.sum(axis=0)
+        raw_squared_g += (x_bg * x_bg).sum(axis=0)  # Raw squared values
+    means_raw_g /= n_cells
+
+    # Compute CP10K variance
+    means_norm = weighted_g / n_cells
+    variances_cp10k = (squared_g / n_cells) - (means_norm**2)
+    variances_cp10k = np.maximum(variances_cp10k, 0)  # Numerical safety
+    # Convert to unbiased estimator (if we have more than 1 cell)
+    if n_cells > 1:
+        variances_cp10k = variances_cp10k * n_cells / (n_cells - 1)
+
+    # Compute Seurat v3 standardized variances
+    variances, variances_norm = _compute_seurat_v3_variances(
+        means_raw_g, variances_cp10k, n_cells, span
+    )
+
+    # Select top genes
+    highly_variable = np.zeros(n_genes, dtype=bool)
+    if n_top_genes is not None:
+        top_indices = np.argsort(variances_norm)[-n_top_genes:]
+        highly_variable[top_indices] = True
+
+    # Create DataFrame
+    # Note: For plotting we need raw variances, not CP10K normalized
+    # Compute raw variances from the raw data
+    variances_raw = (raw_squared_g / n_cells) - (means_raw_g**2)
+    variances_raw = np.maximum(variances_raw, 0)
+    if n_cells > 1:
+        variances_raw = variances_raw * n_cells / (n_cells - 1)
+
+    result = pd.DataFrame(
+        {
+            "means": means_raw_g,
+            "variances": variances_raw,  # Raw variances for plotting
+            "variances_norm": variances_norm,
+            "highly_variable": highly_variable,
+        },
+        index=adata.var_names,
+    )
+
+    return result
+
+
+@beartype.beartype
+def highly_variable_genes_seurat_v3_cols(
+    adata: ad.AnnData,
+    *,
+    n_top_genes: int | None = None,
+    layer: str | None = None,
+    batch_size: int = 2048,
+    target_sum: float = 10_000,
+    span: float = 0.3,
+) -> pd.DataFrame:
+    """
+    Compute Seurat v3 HVGs by streaming columns (genes). Efficient for CSC/col-major data.
+    Makes two passes: first to compute library sizes, then to compute statistics.
+
+    Returns DataFrame with 'means', 'variances', 'variances_norm', 'highly_variable'.
+    """
+    n_cells, n_genes = adata.shape
+
+    # Get data matrix
+    X = adata.layers[layer] if layer else adata.X
+
+    # Initialize accumulators
+    weighted_g = np.zeros((n_genes,), dtype=np.float64)
+    squared_g = np.zeros((n_genes,), dtype=np.float64)
+    det_g = np.zeros((n_genes,), dtype=np.int64)
+
+    # First pass: compute library sizes
+    sizes_n = np.zeros(n_cells, dtype=np.float64)
+    for start, end in helpers.batched_idx(n_genes, batch_size):
+        sizes_n += np.asarray(X[:, start:end].sum(axis=1)).squeeze()
+
+    sizes_n = np.maximum(sizes_n, 1.0)  # guard against empty cells
+    weights_n = (target_sum / sizes_n).astype(np.float64)
+
+    # Second pass: compute weighted statistics and raw means
+    means_raw = np.zeros(n_genes, dtype=np.float64)
+    raw_squared_g = np.zeros(n_genes, dtype=np.float64)
+    for start, end in helpers.batched_idx(n_genes, batch_size):
+        x_ng = X[:, start:end].copy()
+
+        # Handle both sparse and dense
+        if hasattr(x_ng, "toarray"):
+            # Sparse matrix
+            # Compute raw means and raw squared sums before normalization
+            raw_sum = np.asarray(x_ng.sum(axis=0)).squeeze()
+            means_raw[start:end] = raw_sum / n_cells
+            # Raw squared sum (before normalization)
+            x_ng_raw = X[:, start:end].copy()
+            x_ng_raw.data **= 2
+            raw_squared_g[start:end] = np.asarray(x_ng_raw.sum(axis=0)).squeeze()
+            # Now apply normalization for variance computation
+            x_ng.data *= weights_n[x_ng.indices]
+            weighted_g[start:end] += np.asarray(x_ng.sum(axis=0)).squeeze()
+            x_ng.data **= 2
+            squared_g[start:end] += np.asarray(x_ng.sum(axis=0)).squeeze()
+            # Detection counts (only works for CSC format)
+            if hasattr(X[:, start:end], "indptr"):
+                det_g[start:end] += np.diff(X[:, start:end].indptr)
+            else:
+                det_g[start:end] += (X[:, start:end] > 0).sum(axis=0)
+        else:
+            # Dense matrix
+            means_raw[start:end] = x_ng.sum(axis=0) / n_cells
+            raw_squared_g[start:end] = (x_ng**2).sum(axis=0)
+            x_ng_weighted = x_ng * weights_n[:, None]
+            weighted_g[start:end] += x_ng_weighted.sum(axis=0)
+            squared_g[start:end] += (x_ng_weighted**2).sum(axis=0)
+            det_g[start:end] += (x_ng > 0).sum(axis=0)
+
+    # Compute CP10K variance
+    means_norm = weighted_g / n_cells
+    variances_cp10k = (squared_g / n_cells) - (means_norm**2)
+    variances_cp10k = np.maximum(variances_cp10k, 0)  # Numerical safety
+    # Convert to unbiased estimator (if we have more than 1 cell)
+    if n_cells > 1:
+        variances_cp10k = variances_cp10k * n_cells / (n_cells - 1)
+
+    # Compute Seurat v3 standardized variances
+    variances, variances_norm = _compute_seurat_v3_variances(
+        means_raw, variances_cp10k, n_cells, span
+    )
+
+    # Select top genes
+    highly_variable = np.zeros(n_genes, dtype=bool)
+    if n_top_genes is not None:
+        top_indices = np.argsort(variances_norm)[-n_top_genes:]
+        highly_variable[top_indices] = True
+
+    # Create DataFrame
+    # Compute raw variances for plotting
+    variances_raw = (raw_squared_g / n_cells) - (means_raw**2)
+    variances_raw = np.maximum(variances_raw, 0)
+    if n_cells > 1:
+        variances_raw = variances_raw * n_cells / (n_cells - 1)
+
+    result = pd.DataFrame(
+        {
+            "means": means_raw,
+            "variances": variances_raw,  # Raw variances for plotting
+            "variances_norm": variances_norm,
+            "highly_variable": highly_variable,
+        },
+        index=adata.var_names,
+    )
+
+    return result
+
+>>>> scratch.py
+import logging
+
+import mudata as md
+
+log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=log_format)
+
+logging.info("Finished imports.")
+mdata = md.read_h5mu(
+    "/Volumes/samuel-stevens-2TB/datasets/KOLF_Pan_Genome_Aggregate.h5mu",
+    backed="r",
+)
+logging.info("Read file.")
+rna = mdata["rna"].X[:10]
+logging.info("Got RNA in memory.")
+breakpoint()
 
 >>>> tpu-tricks.md
 ## TPU Tricks
