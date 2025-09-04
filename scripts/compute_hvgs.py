@@ -2,6 +2,7 @@
 Compute HVGs.
 """
 
+import concurrent.futures
 import logging
 import pathlib
 import typing as tp
@@ -11,6 +12,7 @@ import beartype
 import matplotlib.pyplot as plt
 import mudata as md
 import numpy as np
+import requests
 import scipy.sparse as sp
 import tyro
 
@@ -228,6 +230,63 @@ def solo_hvgs(
     plot_hvgs(json_path, dump_to, n_top_genes=2_000)
 
 
+@beartype.beartype
+def canonicalize(
+    h5: pathlib.Path, dump_to: pathlib.Path, mod: str = "", gene_id_col: str = ""
+):
+    if h5.suffix == ".h5ad":
+        adata = ad.read_h5ad(h5, backed="r")
+    elif h5.suffix == ".h5mu":
+        mdata = md.read_h5mu(h5, backed="r")
+
+        if mdata.n_mod == 1 and not mod:
+            mod = mdata.mod_names[0]
+            print(f"Assigning mod='{mod}'.")
+
+        if not mod:
+            print(f"Need to pass --mod. Available: {mdata.mod_names}")
+            return
+
+        if mod not in mdata.mod:
+            print(f"Unknown modality --mod '{mod}'. Available: {mdata.mod_names}")
+            return
+
+        adata = mdata.mod[mod]
+    else:
+        print(f"Unknown file type '{h5.suffix}'")
+        return
+
+    def sym_to_id(symbol: str, gene_id: str | None = None):
+        # xrefs/symbol returns Ensembl stable IDs linked to that symbol
+        url = f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{symbol}"
+        r = requests.get(
+            url, headers={"Content-Type": "application/json", "User-Agent": "sam.vcell"}
+        )
+        r.raise_for_status()
+        data = r.json()
+        # Keep gene IDs only (type == 'gene')
+        return sorted({d["id"] for d in data if d.get("type") == "gene"})
+
+    def requests_adapter(resp):
+        # Return headers mapping for auto-update (or None to skip)
+        return getattr(resp, "headers", None)
+
+    # We need a client object to avoid rate limiting. It will use threads, but needs to be just one process so that we can share the rate limit details. Since we will likely be IO-bound, I'm not worried about using a single process. Then we need to parse rate limit headers to make sure we're doing rate limiting. But we can submit many requests all at once, then try to start getting the results.
+    with vcell.ensembl.EnsemblExecutor(
+        max_workers=16, rate=15, burst=30, response_adapter=requests_adapter
+    ) as pool:
+        futures = [
+            pool.submit(sym_to_id, index, row[gene_id_col])
+            for index, row in adata.var.iterrows()
+        ]
+        for fut in concurrent.futures.as_completed(futures):
+            resp = fut.result()
+            # Update the pool's rate based on the headers we get from the response.
+            # pool.set_rate(resp.headers)
+            # Do something with the response; put it in memory, or a sqlite database, or something.
+            print("processing")
+
+
 def describe_layout(x):
     """
     Return a dict describing storage + a recommended streaming axis: 'rows' or 'cols'.
@@ -364,4 +423,5 @@ if __name__ == "__main__":
     tyro.extras.subcommand_cli_from_dict({
         "solo-hvgs": solo_hvgs,
         "plot-hvgs": plot_hvgs,
+        "canonicalize": canonicalize,
     })
