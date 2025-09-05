@@ -256,34 +256,16 @@ def canonicalize(
         print(f"Unknown file type '{h5.suffix}'")
         return
 
-    def sym_to_id(symbol: str, gene_id: str | None = None):
-        # xrefs/symbol returns Ensembl stable IDs linked to that symbol
-        url = f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{symbol}"
-        r = requests.get(
-            url, headers={"Content-Type": "application/json", "User-Agent": "sam.vcell"}
-        )
-        r.raise_for_status()
-        data = r.json()
-        # Keep gene IDs only (type == 'gene')
-        return sorted({d["id"] for d in data if d.get("type") == "gene"})
-
-    def requests_adapter(resp):
-        # Return headers mapping for auto-update (or None to skip)
-        return getattr(resp, "headers", None)
-
     # We need a client object to avoid rate limiting. It will use threads, but needs to be just one process so that we can share the rate limit details. Since we will likely be IO-bound, I'm not worried about using a single process. Then we need to parse rate limit headers to make sure we're doing rate limiting. But we can submit many requests all at once, then try to start getting the results.
-    with vcell.ensembl.EnsemblExecutor(
-        max_workers=16, rate=15, burst=30, response_adapter=requests_adapter
-    ) as pool:
+    with vcell.ensembl.EnsemblQueryPool(max_workers=16, rate=15) as pool:
         futures = [
-            pool.submit(sym_to_id, index, row[gene_id_col])
+            pool.submit(f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{index}")
             for index, row in adata.var.iterrows()
         ]
-        for fut in concurrent.futures.as_completed(futures):
-            resp = fut.result()
-            # Update the pool's rate based on the headers we get from the response.
-            # pool.set_rate(resp.headers)
-            # Do something with the response; put it in memory, or a sqlite database, or something.
+        for fut, (index, row) in zip(
+            concurrent.futures.as_completed(futures), adata.var.iterrows()
+        ):
+            result = fut.result()
             print("processing")
 
 
