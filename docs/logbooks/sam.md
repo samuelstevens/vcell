@@ -312,3 +312,10 @@ Broadly, I think we can summarize it into:
 3. Misc (transformer architecture, wiring it all together, picking mean counts for non-HVG genes, testing)
 
 I think I should work on them in this order too. The key is to do the bare minimum necessary so that I can keep making progress, recognizing that I can come back to the different stages.
+
+
+# 09/03/2025
+
+- Pick out HVGs from all datasets besides VCC
+- Cross-reference those with that vary a lot from control to perturbation in just the VCC data
+- We could have some highly variable with the 50 validation perturbations

@@ -2,7 +2,7 @@
 Compute HVGs.
 """
 
-import concurrent.futures
+import json
 import logging
 import pathlib
 import typing as tp
@@ -12,12 +12,12 @@ import beartype
 import matplotlib.pyplot as plt
 import mudata as md
 import numpy as np
-import requests
 import scipy.sparse as sp
 import tyro
 
 import vcell.helpers
 import vcell.pp
+import vcell.pp.ensembl
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
@@ -256,17 +256,85 @@ def canonicalize(
         print(f"Unknown file type '{h5.suffix}'")
         return
 
-    # We need a client object to avoid rate limiting. It will use threads, but needs to be just one process so that we can share the rate limit details. Since we will likely be IO-bound, I'm not worried about using a single process. Then we need to parse rate limit headers to make sure we're doing rate limiting. But we can submit many requests all at once, then try to start getting the results.
-    with vcell.ensembl.EnsemblQueryPool(max_workers=16, rate=15) as pool:
+    # Validate gene_id_col
+    if gene_id_col:
+        if gene_id_col not in adata.var.columns:
+            print(f"Error: gene_id_col '{gene_id_col}' not found in adata.var.")
+            print(f"Available columns: {list(adata.var.columns)}")
+            return
+    else:
+        # If gene_id_col is empty, list all columns and let user choose
+        print("No gene_id_col specified. Available columns in adata.var:")
+        print()
+
+        # Get up to 3 example values for each column
+        n_examples = min(3, len(adata.var))
+        for i, col in enumerate(adata.var.columns, 1):
+            # Get example values, handling different data types
+            try:
+                examples = adata.var[col].iloc[:n_examples].tolist()
+                # Format examples nicely, truncating long strings
+                formatted_examples = []
+                for ex in examples:
+                    if ex is None or (isinstance(ex, float) and np.isnan(ex)):
+                        formatted_examples.append("NaN")
+                    elif isinstance(ex, str) and len(ex) > 30:
+                        formatted_examples.append(f"{ex[:27]}...")
+                    else:
+                        formatted_examples.append(str(ex))
+                examples_str = ", ".join(formatted_examples)
+                print(f"  {i}. {col:<30} (examples: {examples_str})")
+            except Exception:
+                print(f"  {i}. {col:<30} (could not get examples)")
+
+        while True:
+            user_input = input(
+                "\nEnter column name (or press Enter to skip gene_id mapping): "
+            ).strip()
+
+            if not user_input:
+                # User wants to skip - confirm this choice
+                confirm = (
+                    input("Are you sure you want to skip gene_id mapping? (y/n): ")
+                    .strip()
+                    .lower()
+                )
+                if confirm == "y":
+                    gene_id_col = ""
+                    print("Proceeding without gene_id mapping.")
+                    break
+                else:
+                    continue
+            elif user_input in adata.var.columns:
+                gene_id_col = user_input
+                print(f"Using gene_id_col: '{gene_id_col}'")
+                break
+            else:
+                print(f"Invalid column name '{user_input}'. Please try again.")
+
+    # The client object uses threads, but also avoid going over rate limits. Since we will likely be IO-bound, I'm not worried about using a single process. But we can submit many requests all at once, then try to start getting the results.
+    with (
+        vcell.pp.ensembl.EnsemblQueryPool() as pool,
+        open(dump_to / f"{h5.stem}_symbols.jsonl", "w") as fd,
+    ):
         futures = [
             pool.submit(f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{index}")
             for index, row in adata.var.iterrows()
         ]
         for fut, (index, row) in zip(
-            concurrent.futures.as_completed(futures), adata.var.iterrows()
+            vcell.helpers.progress(futures, desc="ensembl"), adata.var.iterrows()
         ):
+            err = fut.exception()
+            if err is not None:
+                print(f"Failed on {index}: {err}")
+                continue
+
             result = fut.result()
-            print("processing")
+            output_dict = {"ensembl": result, "symbol": index}
+            # Only add gene_id if gene_id_col is specified
+            if gene_id_col:
+                output_dict["gene_id"] = row[gene_id_col]
+            fd.write(json.dumps(output_dict) + "\n")
 
 
 def describe_layout(x):

@@ -4,6 +4,8 @@ Preprocessing functions for single-cell data.
 
 Sub-modules
 -----------
+* vcell.pp.canonicalization
+* vcell.pp.ensembl
 * vcell.pp.hvgs
 
 Functions
