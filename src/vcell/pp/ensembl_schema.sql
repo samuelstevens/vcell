@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS symbols (
     name TEXT NOT NULL,
 
     dataset_id INTEGER NOT NULL REFERENCES datasets(dataset_id) ON DELETE CASCADE,
-    included_ensembl_id INTEGER REFERENCES ensembl(ensembl_id),
+    included_ensembl_id INTEGER REFERENCES ensembl_genes(ensembl_id),
 
     UNIQUE (dataset_id, name)  -- same symbol text unique within a dataset
 ) STRICT;

@@ -13,6 +13,7 @@ import beartype
 import requests
 
 from .. import helpers
+from ..utils import tui
 
 schema_fpath = pathlib.Path(__file__).parent / "ensembl_schema.sql"
 
@@ -218,6 +219,7 @@ class EnsemblQueryPool(concurrent.futures.Executor):
     def _process_request(self, url: str) -> RequestResult:
         """Process a single request with retries. Thread-safe."""
         max_retries = 3
+        result = RequestResult(success=False, error=Exception("No attempts made"))
 
         for attempt in range(max_retries):
             # Wait for rate limit token
@@ -283,7 +285,7 @@ class EnsemblQueryPool(concurrent.futures.Executor):
                 with self._lock:
                     self._in_flight -= 1
                     self._total_requests += 1
-                    self.log_stats_if_needed()
+                    self._log_stats_if_needed()
                 self._work_queue.task_done()
 
     def submit(self, url: str) -> concurrent.futures.Future:
@@ -377,7 +379,7 @@ def get_db(dir: str | os.PathLike) -> sqlite3.Connection:
     """
     os.makedirs(os.path.expandvars(dir), exist_ok=True)
     helpers.warn_if_nfs(dir)
-    db_fpath = os.path.join(os.path.expandvars(dir), "reports.sqlite")
+    db_fpath = os.path.join(os.path.expandvars(dir), "ensembl.sqlite")
     db = sqlite3.connect(db_fpath, autocommit=True)
 
     with open(schema_fpath) as fd:
@@ -388,10 +390,29 @@ def get_db(dir: str | os.PathLike) -> sqlite3.Connection:
     return db
 
 
+@beartype.beartype
 def canonicalize(
-    h5: pathlib.Path, dump_to: pathlib.Path, mod: str = "", gene_id_col: str = ""
+    h5: pathlib.Path,
+    dump_to: pathlib.Path,
+    mod: str = "",
+    gene_id_col: str = "",
+    mode: str = "",
+    n_rows: int = 0,
 ):
-    import json
+    """Canonicalize gene symbols to Ensembl IDs.
+
+    Args:
+        h5: Path to the h5ad or h5mu file
+        dump_to: Directory to store the SQLite database
+        mod: Modality to use (for h5mu files)
+        gene_id_col: Column in adata.var containing gene IDs
+        mode: How to handle existing datasets:
+            - "update": Add new symbols to existing dataset (default)
+            - "replace": Delete and recreate existing dataset
+            - "new": Always create a new dataset
+            - (empty): Ask user interactively
+        n_rows: Number of rows to process (0 for all rows)
+    """
 
     import anndata as ad
     import mudata as md
@@ -427,13 +448,11 @@ def canonicalize(
             return
     else:
         # If gene_id_col is empty, list all columns and let user choose
-        print("No gene_id_col specified. Available columns in adata.var:")
-        print()
+        print("No gene_id_col specified.")
 
-        # Get up to 3 example values for each column
-        n_examples = min(3, len(adata.var))
-        for i, col in enumerate(adata.var.columns, 1):
-            # Get example values, handling different data types
+        # Build display function for columns with examples
+        def display_column(col):
+            n_examples = min(3, len(adata.var))
             try:
                 examples = adata.var[col].iloc[:n_examples].tolist()
                 # Format examples nicely, truncating long strings
@@ -446,61 +465,197 @@ def canonicalize(
                     else:
                         formatted_examples.append(str(ex))
                 examples_str = ", ".join(formatted_examples)
-                print(f"  {i}. {col:<30} (examples: {examples_str})")
+                return f"{col:<30} (examples: {examples_str})"
             except Exception:
-                print(f"  {i}. {col:<30} (could not get examples)")
+                return f"{col:<30} (could not get examples)"
 
-        while True:
-            user_input = input(
-                "\nEnter column name (or press Enter to skip gene_id mapping): "
-            ).strip()
+        # Prompt user to select a column
+        selected_col = tui.prompt_selection_from_list(
+            "Available columns in adata.var:",
+            list(adata.var.columns),
+            display_func=display_column,
+            allow_skip=True,
+            skip_label="Skip gene_id mapping",
+        )
 
-            if not user_input:
-                # User wants to skip - confirm this choice
-                confirm = (
-                    input("Are you sure you want to skip gene_id mapping? (y/n): ")
-                    .strip()
-                    .lower()
-                )
-                if confirm == "y":
-                    gene_id_col = ""
-                    print("Proceeding without gene_id mapping.")
-                    break
-                else:
-                    continue
-            elif user_input in adata.var.columns:
-                gene_id_col = user_input
-                print(f"Using gene_id_col: '{gene_id_col}'")
-                break
+        if selected_col is None:
+            # User wants to skip - confirm this choice
+            if tui.prompt_yes_no("Are you sure you want to skip gene_id mapping?"):
+                gene_id_col = ""
+                print("Proceeding without gene_id mapping.")
             else:
-                print(f"Invalid column name '{user_input}'. Please try again.")
+                # Recursive call to try again
+                return canonicalize(h5, dump_to, mod, "", mode, n_rows)
+        else:
+            gene_id_col = selected_col
+            print(f"Using gene_id_col: '{gene_id_col}'")
 
     db = get_db(dump_to)
-    dataset_stmt = ""
-    # TODO: insert the dataset right now.
 
-    symbol_stmt = (
-        "INSERT INTO symbols(name, dataset_id, included_ensembl_id) VALUES(?, ?, ?)"
-    )
-    ensembl_stmt = ""
-    map_stmt = ""
+    # Normalize path for consistent comparison
+    normalized_path = str(h5.resolve())
+
+    # Check if dataset already exists
+    existing = db.execute(
+        "SELECT dataset_id, name FROM datasets WHERE name = ? AND (gene_id_col = ? OR (gene_id_col IS NULL AND ? IS NULL))",
+        (
+            normalized_path,
+            gene_id_col if gene_id_col else None,
+            gene_id_col if gene_id_col else None,
+        ),
+    ).fetchone()
+
+    if existing:
+        dataset_id = existing[0]
+        print(f"\nFound existing dataset (ID: {dataset_id}) for {existing[1]}")
+
+        # Get symbol count for this dataset
+        symbol_count = db.execute(
+            "SELECT COUNT(*) FROM symbols WHERE dataset_id = ?", (dataset_id,)
+        ).fetchone()[0]
+        print(f"  Currently contains {symbol_count} symbols")
+
+        # Handle mode selection
+        if not mode:
+            # Interactive mode selection
+            choices = [
+                tui.Choice(
+                    key="1",
+                    value="update",
+                    label="update",
+                    description="Add new symbols to existing dataset",
+                ),
+                tui.Choice(
+                    key="2",
+                    value="replace",
+                    label="replace",
+                    description="Delete existing dataset and reimport",
+                    requires_confirmation=True,
+                    confirmation_prompt=f"Are you sure you want to delete {symbol_count} existing symbols? (y/n): ",
+                ),
+                tui.Choice(
+                    key="3",
+                    value="new",
+                    label="new",
+                    description="Create a new dataset entry",
+                ),
+            ]
+
+            mode = tui.prompt_choice(
+                "How would you like to proceed?", choices=choices, default="update"
+            )
+            print(f"Using {mode} mode.")
+
+        # Apply the selected mode
+        if mode == "update":
+            print(f"Updating existing dataset {dataset_id}")
+            # dataset_id already set, nothing more to do
+        elif mode == "replace":
+            print(f"Replacing dataset {dataset_id}, deleting {symbol_count} symbols...")
+            db.execute("DELETE FROM symbols WHERE dataset_id = ?", (dataset_id,))
+            db.commit()
+            print("Existing symbols deleted.")
+            # dataset_id already set, will reuse it
+        elif mode == "new":
+            print("Creating new dataset entry...")
+            # Insert new dataset
+            dataset_stmt = "INSERT INTO datasets(name, gene_id_col) VALUES(?, ?)"
+            cursor = db.execute(
+                dataset_stmt, (normalized_path, gene_id_col if gene_id_col else None)
+            )
+            dataset_id = cursor.lastrowid
+            db.commit()
+            print(f"Created new dataset with ID: {dataset_id}")
+        else:
+            print(f"Invalid mode '{mode}'. Must be 'update', 'replace', or 'new'.")
+            return
+    else:
+        # No existing dataset, create new one
+        print(f"\nNo existing dataset found for {normalized_path}")
+        print("Creating new dataset entry...")
+        dataset_stmt = "INSERT INTO datasets(name, gene_id_col) VALUES(?, ?)"
+        cursor = db.execute(
+            dataset_stmt, (normalized_path, gene_id_col if gene_id_col else None)
+        )
+        dataset_id = cursor.lastrowid
+        db.commit()
+        print(f"Created new dataset with ID: {dataset_id}")
+
+    symbol_stmt = "INSERT OR IGNORE INTO symbols(name, dataset_id, included_ensembl_id) VALUES(?, ?, ?)"
+    ensembl_stmt = "INSERT OR IGNORE INTO ensembl_genes(gene_id, version, display_name) VALUES(?, ?, ?)"
+    map_stmt = "INSERT OR IGNORE INTO symbol_ensembl_map(symbol_id, ensembl_gene_id, source) VALUES(?, ?, ?)"
 
     # The client object uses threads, but also avoid going over rate limits. Since we will likely be IO-bound, I'm not worried about using a single process. But we can submit many requests all at once, then try to start getting the results.
+
+    # Limit rows if n_rows is specified
+    if n_rows > 0:
+        import itertools
+
+        var_iter = itertools.islice(adata.var.iterrows(), n_rows)
+        var_list = list(var_iter)
+        print(f"Processing first {n_rows} rows for testing")
+    else:
+        var_list = list(adata.var.iterrows())
+        print(f"Processing all {len(var_list)} rows")
+
+    # First pass: identify which symbols need API calls
+    symbols_needing_api = []
+    symbol_to_row = {}
+    symbols_with_mappings = 0
+
+    for index, row in var_list:
+        # Check if symbol already exists for this dataset
+        existing_symbol = db.execute(
+            "SELECT symbol_id FROM symbols WHERE name = ? AND dataset_id = ?",
+            (index, dataset_id),
+        ).fetchone()
+
+        if existing_symbol:
+            symbol_id = existing_symbol[0]
+            # Check if this symbol already has Ensembl mappings
+            existing_mappings = db.execute(
+                "SELECT COUNT(*) FROM symbol_ensembl_map WHERE symbol_id = ?",
+                (symbol_id,),
+            ).fetchone()[0]
+
+            if existing_mappings > 0:
+                symbols_with_mappings += 1
+                continue  # Skip API call for this symbol
+        else:
+            # Insert new symbol
+            cursor = db.execute(symbol_stmt, (index, dataset_id, None))
+            symbol_id = cursor.lastrowid
+            db.commit()
+
+        # This symbol needs an API call
+        symbols_needing_api.append((index, row, symbol_id))
+        symbol_to_row[index] = (row, symbol_id)
+
+    if symbols_with_mappings > 0:
+        print(
+            f"Skipping {symbols_with_mappings} symbols that already have Ensembl mappings"
+        )
+
+    if not symbols_needing_api:
+        print("All symbols already have Ensembl mappings, nothing to query")
+        return
+
+    print(f"Querying Ensembl API for {len(symbols_needing_api)} symbols")
+
     with EnsemblQueryPool() as pool:
-        futures = [
-            pool.submit(f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{index}")
-            for index, row in adata.var.iterrows()
-        ]
-        for fut, (index, row) in zip(
-            helpers.progress(futures, desc="ensembl", every=100), adata.var.iterrows()
+        # Submit API requests only for symbols that need them
+        futures = {}
+        for index, row, symbol_id in symbols_needing_api:
+            future = pool.submit(
+                f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{index}"
+            )
+            futures[future] = (index, row, symbol_id)
+
+        # Process results as they complete
+        for fut in helpers.progress(
+            futures.keys(), desc="ensembl", every=100 if len(futures) > 100 else 10
         ):
-            try:
-                # TODO: insert the symbol id
-                pass
-            except sqlite3.Error as err:
-                db.rollback()
-                print(f"Error writing symbol blah blah for {index}")
-                continue
+            index, row, symbol_id = futures[fut]
 
             err = fut.exception()
             if err is not None:
@@ -513,15 +668,48 @@ def canonicalize(
             if gene_id_col:
                 output_dict["gene_id"] = row[gene_id_col]
             try:
-                # TODO: insert the ensembl id, update the ensembl map (via inserts)
-                pass
+                # Process each ensembl result from the API
+                for item in result:
+                    if item.get("type") == "gene":
+                        gene_id = item.get("id", "")
+                        # Split gene_id to get base ID and version if present
+                        if "." in gene_id:
+                            base_id, version = gene_id.rsplit(".", 1)
+                        else:
+                            base_id, version = gene_id, None
+
+                        # Insert ensembl gene
+                        cursor = db.execute(
+                            ensembl_stmt,
+                            (base_id, version, item.get("description", "")),
+                        )
+
+                        # Get the ensembl_id (either newly inserted or existing)
+                        ensembl_id = db.execute(
+                            "SELECT ensembl_id FROM ensembl_genes WHERE gene_id = ?",
+                            (base_id,),
+                        ).fetchone()[0]
+
+                        # Create mapping between symbol and ensembl gene
+                        db.execute(map_stmt, (symbol_id, ensembl_id, "ensembl_xrefs"))
+
+                        # Update symbol with included_ensembl_id if this is the first/primary match
+                        db.execute(
+                            "UPDATE symbols SET included_ensembl_id = ? WHERE symbol_id = ? AND included_ensembl_id IS NULL",
+                            (ensembl_id, symbol_id),
+                        )
+
+                db.commit()
             except sqlite3.Error as err:
                 db.rollback()
-                print(f"Error writing blah blah for {index}")
+                print(f"Error writing ensembl data for symbol '{index}': {err}")
 
 
 def cli():
     import tyro
+
+    log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+    logging.basicConfig(level=logging.INFO, format=log_format)
 
     tyro.extras.subcommand_cli_from_dict({
         "canonicalize": canonicalize,
