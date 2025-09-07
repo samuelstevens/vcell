@@ -1,13 +1,20 @@
 import concurrent.futures
 import dataclasses
 import logging
+import os
+import pathlib
 import queue
+import sqlite3
 import threading
 import time
 import typing as tp
 
 import beartype
 import requests
+
+from .. import helpers
+
+schema_fpath = pathlib.Path(__file__).parent / "ensembl_schema.sql"
 
 
 @beartype.beartype
@@ -356,3 +363,167 @@ class EnsemblQueryPool(concurrent.futures.Executor):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.shutdown(wait=True)
         return False
+
+
+@beartype.beartype
+def get_db(dir: str | os.PathLike) -> sqlite3.Connection:
+    """Get a connection to the cached ensembl database.
+
+    Args:
+        dir: Where to look.
+
+    Returns:
+        sqlite3.Connection: A connection to the SQLite database
+    """
+    os.makedirs(os.path.expandvars(dir), exist_ok=True)
+    helpers.warn_if_nfs(dir)
+    db_fpath = os.path.join(os.path.expandvars(dir), "reports.sqlite")
+    db = sqlite3.connect(db_fpath, autocommit=True)
+
+    with open(schema_fpath) as fd:
+        schema = fd.read()
+    db.executescript(schema)
+    db.autocommit = False
+
+    return db
+
+
+def canonicalize(
+    h5: pathlib.Path, dump_to: pathlib.Path, mod: str = "", gene_id_col: str = ""
+):
+    import json
+
+    import anndata as ad
+    import mudata as md
+    import numpy as np
+
+    if h5.suffix == ".h5ad":
+        adata = ad.read_h5ad(h5, backed="r")
+    elif h5.suffix == ".h5mu":
+        mdata = md.read_h5mu(h5, backed="r")
+
+        if mdata.n_mod == 1 and not mod:
+            mod = mdata.mod_names[0]
+            print(f"Assigning mod='{mod}'.")
+
+        if not mod:
+            print(f"Need to pass --mod. Available: {mdata.mod_names}")
+            return
+
+        if mod not in mdata.mod:
+            print(f"Unknown modality --mod '{mod}'. Available: {mdata.mod_names}")
+            return
+
+        adata = mdata.mod[mod]
+    else:
+        print(f"Unknown file type '{h5.suffix}'")
+        return
+
+    # Validate gene_id_col
+    if gene_id_col:
+        if gene_id_col not in adata.var.columns:
+            print(f"Error: gene_id_col '{gene_id_col}' not found in adata.var.")
+            print(f"Available columns: {list(adata.var.columns)}")
+            return
+    else:
+        # If gene_id_col is empty, list all columns and let user choose
+        print("No gene_id_col specified. Available columns in adata.var:")
+        print()
+
+        # Get up to 3 example values for each column
+        n_examples = min(3, len(adata.var))
+        for i, col in enumerate(adata.var.columns, 1):
+            # Get example values, handling different data types
+            try:
+                examples = adata.var[col].iloc[:n_examples].tolist()
+                # Format examples nicely, truncating long strings
+                formatted_examples = []
+                for ex in examples:
+                    if ex is None or (isinstance(ex, float) and np.isnan(ex)):
+                        formatted_examples.append("NaN")
+                    elif isinstance(ex, str) and len(ex) > 30:
+                        formatted_examples.append(f"{ex[:27]}...")
+                    else:
+                        formatted_examples.append(str(ex))
+                examples_str = ", ".join(formatted_examples)
+                print(f"  {i}. {col:<30} (examples: {examples_str})")
+            except Exception:
+                print(f"  {i}. {col:<30} (could not get examples)")
+
+        while True:
+            user_input = input(
+                "\nEnter column name (or press Enter to skip gene_id mapping): "
+            ).strip()
+
+            if not user_input:
+                # User wants to skip - confirm this choice
+                confirm = (
+                    input("Are you sure you want to skip gene_id mapping? (y/n): ")
+                    .strip()
+                    .lower()
+                )
+                if confirm == "y":
+                    gene_id_col = ""
+                    print("Proceeding without gene_id mapping.")
+                    break
+                else:
+                    continue
+            elif user_input in adata.var.columns:
+                gene_id_col = user_input
+                print(f"Using gene_id_col: '{gene_id_col}'")
+                break
+            else:
+                print(f"Invalid column name '{user_input}'. Please try again.")
+
+    db = get_db(dump_to)
+    dataset_stmt = ""
+    # TODO: insert the dataset right now.
+
+    symbol_stmt = (
+        "INSERT INTO symbols(name, dataset_id, included_ensembl_id) VALUES(?, ?, ?)"
+    )
+    ensembl_stmt = ""
+    map_stmt = ""
+
+    # The client object uses threads, but also avoid going over rate limits. Since we will likely be IO-bound, I'm not worried about using a single process. But we can submit many requests all at once, then try to start getting the results.
+    with EnsemblQueryPool() as pool:
+        futures = [
+            pool.submit(f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{index}")
+            for index, row in adata.var.iterrows()
+        ]
+        for fut, (index, row) in zip(
+            helpers.progress(futures, desc="ensembl", every=100), adata.var.iterrows()
+        ):
+            try:
+                # TODO: insert the symbol id
+                pass
+            except sqlite3.Error as err:
+                db.rollback()
+                print(f"Error writing symbol blah blah for {index}")
+                continue
+
+            err = fut.exception()
+            if err is not None:
+                print(f"Failed on {index}: {err}")
+                continue
+
+            result = fut.result()
+            output_dict = {"ensembl": result, "symbol": index}
+            # Only add gene_id if gene_id_col is specified
+            if gene_id_col:
+                output_dict["gene_id"] = row[gene_id_col]
+            try:
+                # TODO: insert the ensembl id, update the ensembl map (via inserts)
+                pass
+            except sqlite3.Error as err:
+                db.rollback()
+                print(f"Error writing blah blah for {index}")
+
+
+def cli():
+    import tyro
+
+    tyro.extras.subcommand_cli_from_dict({
+        "canonicalize": canonicalize,
+        "noop": lambda: None,
+    })

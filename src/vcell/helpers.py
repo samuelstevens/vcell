@@ -2,10 +2,13 @@
 import collections.abc
 import dataclasses
 import logging
+import os
 import pathlib
 import subprocess
+import sys
 import time
 import typing as tp
+import warnings
 
 import beartype
 
@@ -211,3 +214,51 @@ def check_grain_ops(ops: list[object]):
             cloudpickle.dumps(op)
         except TypeError as err:
             raise AssertionError(f"Failed to pickle {op}: {err}")
+
+
+@beartype.beartype
+def warn_if_nfs(path: str | os.PathLike):
+    """
+    If *path* is on an NFS mount, emit a RuntimeWarning.
+
+    Works on Linux (/proc/mounts) and macOS/BSD (`mount` CLI); silently returns on other OSes or if detection fails.
+    """
+    NFS_TYPES = {"nfs", "nfs4", "nfsd", "autofs"}  # extend if you wish
+
+    p = pathlib.Path(path).resolve()
+
+    # Linux: /proc/self/mountinfo
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/self/mountinfo") as fd:
+                entries = [line.split() for line in fd]
+            # fields: 4= mount point, - separator -, fstype
+            mounts = {fields[4]: fields[-3] for fields in entries}
+        except Exception:
+            return
+
+    # macOS / BSD: `mount`
+    elif sys.platform in {"darwin", "freebsd"}:
+        try:
+            out = subprocess.check_output(["mount"], text=True)
+            mounts = {}
+            for line in out.splitlines():
+                mp, _dev, fstype, *_ = line.split()  # mount-point, ...
+                mounts[mp] = fstype
+        except Exception:
+            return
+    else:
+        return  # unsupported OS
+
+    # find longest mount-point prefix of *p*
+    mount_point = max(
+        (mp for mp in mounts if p.is_relative_to(mp) or mp == "/"),
+        key=len,
+        default="/",
+    )
+    if mounts.get(mount_point) in NFS_TYPES:
+        warnings.warn(
+            f"SQLite database '{path}' appears to be on an NFS mount (fs type: {mounts[mount_point]}). Concurrent writers over NFS can corrupt the journal; consider using a local SSD or tmpfs instead.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
