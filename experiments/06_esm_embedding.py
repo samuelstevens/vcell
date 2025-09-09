@@ -26,6 +26,9 @@ from collections import defaultdict
 
 from vcell import helpers
 
+import torch
+import esm
+
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
 logger = logging.getLogger("06")
@@ -69,10 +72,49 @@ def main(cfg: Config):
                 
                 protein_isoforms[gene_id].append(ProteinIsoform(translation_id, amino_rsp.text.strip()))
         # TODO: probably too many requests, need to batch or cache
-        #logger.info(f"Found {len(protein_isoforms[gene_id])} isoforms for gene {gene_id}")
+        logger.info(f"Found {len(protein_isoforms[gene_id])} isoforms for gene {gene_id}")
 
-# TODO: ESM2 with amino acid sequences
+        # Pretrained ESM2 inference for getting protein embeddings from amino acid sequences
+        model, alphabet = esm.pretrained.esm2_t6_8M_UR50D()
+        batch_converter = alphabet.get_batch_converter()
+        model.eval()  # disable dropout for deterministic results
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+        model = model.to(device)
+
+        # data of the form (label, sequence)
+        data = [(f"{gene_id}_{isoform.translation_id}", isoform.amino_acid_sequence) for isoform in protein_isoforms[gene_id]]
+        if len(data) == 0:
+            logger.warning(f"No isoforms found for gene {gene_id}, skipping")
+            continue
+
+        # Convert to ESM2 tokens and move to device
+        # batch tokens convert each sequence to a sequence of numbers 0 to 20 (20 amino acids + padding)
+        # the alphabet is integers mapped to amino acids + <cls>, <pad>, <eos>, <unk>, <mask>
+        # batch tokens is a tensor of shape (batch_size, max_seq_len)
+        batch_labels, batch_strs, batch_tokens = batch_converter(data)
+        batch_tokens = batch_tokens.to(device)
+        batch_lens = (batch_tokens != alphabet.padding_idx).sum(1)
+        with torch.no_grad():
+            # repr_layers specifies which layers to return representations from
+            # here we only want the final layer (layer 6 for esm2_t6_8M_UR50D)
+            # return_contacts specifies whether to return contact predictions - cant do this locally
+            results = model(batch_tokens, repr_layers=[model.num_layers], return_contacts=False)
+
+        # for each sequence in the batch, (batch_size), we have a 1 row for each amino acid in the sequence (seq_len), and each amino acid is represented by a vector of length hidden_dim (hidden_dim)
+        token_representations = results["representations"][model.num_layers] # (batch_size, seq_len, hidden_dim)
+
+        # Generate per-sequence representations via averaging
+        # Note that the <cls> token (first token) and <eos> token (last token) are not included in the averaging
+        sequence_representations = []
+        for i, tokens_len in enumerate(batch_lens):
+            # Remove <cls>, padding, and <eos> tokens, take the averager of the remaining tokens to get a embedding for the entire sequence dimensions = (hidden_dim,)
+            seq_rep = token_representations[i, 1 : tokens_len - 1].mean(0)
+            sequence_representations.append(seq_rep.cpu().numpy())
+        
+        sequence_representations = np.stack(sequence_representations)  # (num_isoforms, hidden_dim)
+        gene_embedding = sequence_representations.mean(0)  # (hidden_dim,)
+        logger.info(f"Gene {gene_id} embedding shape: {gene_embedding.shape}")
 
 if __name__ == "__main__":
     main(tyro.cli(Config))
