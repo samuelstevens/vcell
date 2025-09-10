@@ -8,7 +8,7 @@ Created on Mon Sep  8 16:09:46 2025
 import polars as pl
 import numpy as np
 
-uri = "sqlite://ensembl.sqlite"
+uri = "sqlite:///C:/Users/alexa/Documents/VirtualCell/ensembl.sqlite"
 
 df = pl.read_database_uri(query="SELECT * FROM symbol_ensembl_map", uri=uri)
 
@@ -33,6 +33,12 @@ for symbol in symbol_list:
     tmp_gene_list = np.array([symbol], dtype=object)
     gene_list = np.array([], dtype=object)
     
+    #if symbol is actually ensembl_id, search for associated ensembl ids, then run first iteration of while loop on ensembl_id list WITH symbol
+    if "ENSG" in symbol:
+        tmp_gene_list2 = np.unique(np.array(df.filter(pl.col("symbol_id") == symbol).select("ensembl_gene_id")["ensembl_gene_id"]))
+        tmp_gene_list = np.concatenate((tmp_gene_list, tmp_gene_list2))
+        is_symbol = False
+    
     #get gene symbol from ensembl id and vice versa until no new elements are generated (reached the complete gene set associated with a given symbol)
     while np.all(np.in1d(tmp_gene_list, gene_list)) == False:
         new_gene_list = np.setdiff1d(tmp_gene_list, gene_list)
@@ -44,6 +50,7 @@ for symbol in symbol_list:
                 #print(f"symbol: {sym}")
                 tmp_gene_list2 = np.unique(np.array(df.filter(pl.col("symbol_id") == sym).select("ensembl_gene_id")["ensembl_gene_id"]))
                 tmp_gene_list = np.concatenate((tmp_gene_list, tmp_gene_list2))
+                    
         else:
             tmp_gene_list = np.array([], dtype=object)
             for ens in new_gene_list:
@@ -74,4 +81,4 @@ counts_of_counts_canon = counts_canon["n_gene_occurrences"].value_counts().sort(
 print(counts_of_counts_canon)
 
 canon_df_wcounts = counts_canon.join(canon_df, on="gene").sort("n_gene_occurrences")
-canon_df_wcounts.write_csv("canon_ensembl_map.csv")
+canon_df_wcounts.write_csv("C:/Users/alexa/Documents/VirtualCell/data_inves/canon_ensembl_map.csv")
