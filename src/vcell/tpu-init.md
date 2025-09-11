@@ -1,31 +1,30 @@
 ## Running TPU init
 
-We can pass metadata to our TPU create command including an initilization script and a github ssh key. In short, this script clones the vcell repo, downloads/unzips the vcc_data from a GCS instance and runs an experiment.
-
-TODO: Remove the ssh nonsense and clone a public github repo. Allow user to pass bucket name, experiment name, wandb creds.
+We can pass metadata to our TPU create command that helps speed up the painful init process. 
 
 To get started:
 
 1. Create a Google Cloud Storage bucket and upload vcc_data.zip. The script assumes your vcell bucket name is vcell-bucket.
 
 2. Grant TPU VM access to your GCS bucket:
+* `$PROJECT_ID` is the id found on the Google UI thingy.
 
 ```sh
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:PROJECT_ID-compute@developer.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$PROJECT_ID-compute@developer.gserviceaccount.com" \
   --role="roles/storage.objectViewer"
 ```
 
-3. Create SSH key (local) and add the public key to GitHub.
-
-4. Base64 encode the private key.
-
-5. Create a spot tpu and pass the startup script and base64 encoded github ssh key.
+5. Create a spot tpu and pass these new fields:
+* `$SCRIPT` is the name of a file under /experiments. Ex: "05_training.py"
+* `$ARGS` will be passed directly into $SCRIPT. Ex: "--vcc /tmp/vcc_data/ --data.h5ad-fpath /tmp/vcc_data/adata_Training.h5ad"
+* `$WANDB_*` DON'T CURRENTLY DO ANYTING - SEE MACIEJ. Just put anything in there for now.
 
 ```sh
-gcloud compute tpus tpu-vm create SOME_NAME --zone=ZONE \
---accelerator-type=TYPE --version=VERSION \
---metadata "github-ssh-key=<BASE64-ED25519-KEY>" --metadata-from-file startup-script=tpu-init.sh --spot
+gcloud compute tpus tpu-vm create $NAME --zone=$ZONE \
+--accelerator-type=$TYPE --version=e$VERSION \
+--metadata "experiment-script=$SCRIPT,experiment-args=$ARGS,wandb-api-key=$WANDB_KEY,wandb-project=$WANDB_PROJECT",wandb-entity=$WANDB_ENTITY" \ 
+--metadata-from-file startup-script=tpu-init.sh --spot
 ```
 
-Startup logs can be found /tmp/startup and training logs in /tmp/training
+Startup logs can be found at /tmp/startup.log and experiment logs at /tmp/experiment.log.
