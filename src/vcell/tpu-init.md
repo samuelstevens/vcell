@@ -23,7 +23,9 @@ gcloud projects add-iam-policy-binding PROJECT_ID \
 5. Create a spot tpu and pass the startup script and base64 encoded github ssh key.
 
 ```sh
-gcloud compute tpus tpu-vm create SOME_NAME --zone=ZONE \ --accelerator-type=TYPE --version=VERSION --metadata \ "github-ssh-key=<BASE64-ED25519-KEY>" --metadata-from-file \ startup-script=tpu-init.sh --spot
+gcloud compute tpus tpu-vm create SOME_NAME --zone=ZONE \
+--accelerator-type=TYPE --version=VERSION \
+--metadata "github-ssh-key=<BASE64-ED25519-KEY>" --metadata-from-file startup-script=tpu-init.sh --spot
 ```
 
 Startup logs can be found /tmp/startup and training logs in /tmp/training
