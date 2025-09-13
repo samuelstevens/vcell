@@ -4,6 +4,9 @@ Module vcell.helpers
 Functions
 ---------
 
+`check_grain_ops(ops: list[object])`
+:   
+
 `current_git_commit() ‑> str | None`
 :   Best-effort short SHA of the repo containing *this* file.
     
@@ -11,6 +14,15 @@ Functions
     * `git` executable is missing,
     * we’re not inside a git repo (e.g. installed wheel),
     * or any git call errors out.
+
+`dict_to_dataclass(data: dict, cls: type) ‑> Any`
+:   Recursively convert a dictionary to a dataclass instance.
+
+`get_non_default_values(obj: Any, default_obj: Any) ‑> dict`
+:   Recursively find fields that differ from defaults.
+
+`merge_configs(base: Any, overrides: dict) ‑> Any`
+:   Recursively merge override values into a base config.
 
 Classes
 -------

@@ -22,3 +22,4 @@ outputs/
 /data/
 docs/assets/
 *.gz
+wandb/

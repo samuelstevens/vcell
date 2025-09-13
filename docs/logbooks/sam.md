@@ -171,3 +171,151 @@ I think we need to provide some very high-level context. It should be simple, co
 
 Great news! I think we have a complete process of training and evaluating a model!
 
+TODOs
+
+1. Add wandb logging of loss and performance (speed)
+2. Add scperturb datasets
+
+
+# 08/16/2025
+
+1. Download datasets
+2. Do EDA
+3. Distributional loss
+4. Run training. Observe speed issues.
+   ^-- HAHHAHA like it's going to be this easy.
+
+# 08/23/2025
+
+1. Download datasets [done]
+2. Do EDA
+3. Distributional loss
+4. Run training. Observe speed issues.
+   ^-- HAHHAHA like it's going to be this easy.
+
+What does it mean to do EDA?
+I think I need to figure out and describe precisely what the training objective is, then I can write it, then I can force the data to fit it.
+
+I also think it's critical to log normalize the data
+
+So, my next set of tasks:
+
+1. Log-normalize the data. Add checks to make sure this is always true?
+2. Overfit on a single batch.
+3. Include the scPerturb data.
+4. Write a non-shit grain dataloader.
+5. Read about queued resources? Maybe my training jobs need to be docker images that run?
+
+Some tips from GPT:
+
+- Log grad norms and param update norms each step. If updates ~0, LR too small or parameters frozen; if huge/NaN, LR too big or bad init.
+- Check you’re training in the same space you evaluate: log-normalized in, log-normalized out. No hidden exp/log lingering.
+- Verify data labels: each batch element’s (line, batch, perturbation) used for the same control in eval.
+- Make your eval slice deterministic (fixed RNG, fixed HVG mask, fixed S cells). Randomness can hide real progress.
+
+# 08/24/2025
+
+I'm going to make a huge checklist of things to do.
+
+- Log normalize the data.
+- [done] Overfit with pseudobulk MSE
+- Include the scPerturb data
+- Write a non-shit grain dataloader.
+- Learn about queued GCS resources
+- Convert h5mu to h5ad
+- Distributional loss (MDD2)
+- Add a validation/holdout split.
+- Log optimizer and loss as config options
+- Log effect L1
+
+My order is going to be
+
+- [done] Los optimizer as config option
+- [done] Log effect L1
+- [done] Write a non-shit grain dataloader.
+- [done] Include the scPerturb data
+- Log normalize the data.
+- Distributional loss (MDD2)
+- Learn about queued GCS resources
+- Convert h5mu to h5ad
+- Add a validation/holdout split.
+- Use a bigger model
+- Log loss term as config option
+- Metrics
+
+# 08/27/2025
+
+1. [done] Include scPerturb data.
+2. Log normalization.
+3. Use a slightly bigger model.
+
+Including scPerturb checklist:
+
+- Is the pert2id lookup consistent across datasets?
+- Is the pert2id lookup consistent across reloads?
+- Is the model's pert embedding table the right size
+- Is the mask is being used?
+- Is the mask correct?
+- Are we stripping ensembl versions everywhere? -> what are ensembl versions?
+
+Sequential
+
+```sh
+fio --name=net --filename=$FILENAME --rw=read --bs=1kb --direct=1 --iodepth=16 --runtime=30 --time_based
+```
+
+Random
+
+```sh
+fio --name=net --filename=$FILENAME --rw=randread --bs=1kb --direct=1 --iodepth=16 --runtime=30 --time_based
+```
+
+| Disk | Task | Result |
+|---|---|---|
+| Macbook SSD | Sequential Read | READ: bw=88.2MiB/s (92.4MB/s), 88.2MiB/s-88.2MiB/s (92.4MB/s-92.4MB/s), io=2645MiB (2773MB) |
+| Macbook SSD | Random Read | READ: bw=31.5MiB/s (33.1MB/s), 31.5MiB/s-31.5MiB/s (33.1MB/s-33.1MB/s), io=946MiB (992MB) |
+| External HDD | Sequential Read | READ: bw=700KiB/s (717kB/s), 700KiB/s-700KiB/s (717kB/s-717kB/s), io=20.5MiB (21.5MB) |
+| External HDD | Random Read | READ: bw=4785B/s (4785B/s), 4785B/s-4785B/s (4785B/s-4785B/s), io=141KiB (144kB) |
+| GCC PD | Sequential Read | READ: bw=2305KiB/s (2360kB/s), 2305KiB/s-2305KiB/s (2360kB/s-2360kB/s), io=67.5MiB (70.8MB) |
+| GCC PD | Random Read | READ: bw=41.6KiB/s (42.6kB/s), 41.6KiB/s-41.6KiB/s (42.6kB/s-42.6kB/s), io=1248KiB (1278kB) |
+
+# 08/30/2025
+
+I am working on understanding how to leverage these six datasets for training:
+
+- VCC training data
+- Replogle x2, Nadig x2
+- KOLF
+
+So I think for each dataset source, we need to:
+
+1. Map observation columns to ensembl IDs. If they have gene symbols but not ensembl IDs, then we need to look up the ensembld IDs using some web service
+2. Measure the highly variable genes using scanpy for each dataset. Then we pick the top 2K across all datasets by (1) the intersection of HVGs across all dataset (2) fill the rest by which genes are HVGs in the most number of datasets
+3. Record the keys to use for grouping by (batch, cell line, etc) for each dataset
+4. Log-normalize each dataset CP10K + log1p
+
+I think then we can sample a groupby key, select a perturbation, then sample S control RNA transcriptomes, sample S perturbed RNA transcriptomes, and use the 2K HVGs as input/output instead of the 18K. Then we will fill in the remaining 16K with mean counts, which should be okay since
+
+1. The baseline is mean counts, so we aren't any worse
+2. They're not highly variable, so they shouldn't change too much
+
+# 08/31/2025
+
+I am getting absolutely railed by the complexity of this project.
+I almost don't know how to keep all the different pieces in my head.
+There are more moving parts than I know what to do with.
+
+Broadly, I think we can summarize it into:
+
+1. Data preparation (HVGs, ensembl ID mapping, data loader, reformatting data for efficient row-reads, etc)
+2. Cloud preparation (GCS buckets, persistent disks, spot instances, queued resources, init.sh, etc)
+3. Misc (transformer architecture, wiring it all together, picking mean counts for non-HVG genes, testing)
+
+I think I should work on them in this order too. The key is to do the bare minimum necessary so that I can keep making progress, recognizing that I can come back to the different stages.
+
+
+# 09/03/2025
+
+- Pick out HVGs from all datasets besides VCC
+- Cross-reference those with that vary a lot from control to perturbation in just the VCC data
+- We could have some highly variable with the 50 validation perturbations

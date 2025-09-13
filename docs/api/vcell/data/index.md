@@ -3,6 +3,7 @@ Module vcell.data
 
 Sub-modules
 -----------
+* vcell.data.harmonize
 * vcell.data.naive_dataloader
 
 Classes

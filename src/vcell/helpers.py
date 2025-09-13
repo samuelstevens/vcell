@@ -1,9 +1,11 @@
 # src/vcell/helpers.py
 import collections.abc
+import dataclasses
 import logging
 import pathlib
 import subprocess
 import time
+import typing as tp
 
 import beartype
 
@@ -124,3 +126,88 @@ def current_git_commit() -> str | None:
         return result.stdout.strip() or None
     except (FileNotFoundError, subprocess.CalledProcessError):
         return None
+
+
+@beartype.beartype
+def dict_to_dataclass(data: dict, cls: type) -> tp.Any:
+    """Recursively convert a dictionary to a dataclass instance."""
+    if not dataclasses.is_dataclass(cls):
+        return data
+
+    field_types = {f.name: f.type for f in dataclasses.fields(cls)}
+    kwargs = {}
+
+    for field_name, field_type in field_types.items():
+        if field_name not in data:
+            continue
+
+        value = data[field_name]
+
+        # Handle Optional types
+        origin = tp.get_origin(field_type)
+        args = tp.get_args(field_type)
+
+        # Handle tuple[str, ...]
+        if origin is tuple and args:
+            kwargs[field_name] = tuple(value) if isinstance(value, list) else value
+        # Handle list[DataclassType]
+        elif origin is list and args and dataclasses.is_dataclass(args[0]):
+            kwargs[field_name] = [dict_to_dataclass(item, args[0]) for item in value]
+        # Handle regular dataclass fields
+        elif dataclasses.is_dataclass(field_type):
+            kwargs[field_name] = dict_to_dataclass(value, field_type)
+        # Handle pathlib.Path
+        elif field_type is pathlib.Path or (
+            origin is tp.Union and pathlib.Path in args
+        ):
+            kwargs[field_name] = pathlib.Path(value) if value is not None else value
+        else:
+            kwargs[field_name] = value
+
+    return cls(**kwargs)
+
+
+@beartype.beartype
+def get_non_default_values(obj: tp.Any, default_obj: tp.Any) -> dict:
+    """Recursively find fields that differ from defaults."""
+    obj_dict = dataclasses.asdict(obj)
+    default_dict = dataclasses.asdict(default_obj)
+
+    diff = {}
+    for key, value in obj_dict.items():
+        default_value = default_dict.get(key)
+        if value != default_value:
+            diff[key] = value
+
+    return diff
+
+
+@beartype.beartype
+def merge_configs(base: tp.Any, overrides: dict) -> tp.Any:
+    """Recursively merge override values into a base config."""
+    if not overrides:
+        return base
+
+    base_dict = dataclasses.asdict(base)
+
+    for key, value in overrides.items():
+        if key in base_dict:
+            # For nested dataclasses, merge recursively
+            if isinstance(value, dict) and dataclasses.is_dataclass(getattr(base, key)):
+                base_dict[key] = dataclasses.asdict(
+                    merge_configs(getattr(base, key), value)
+                )
+            else:
+                base_dict[key] = value
+
+    return dict_to_dataclass(base_dict, type(base))
+
+
+def check_grain_ops(ops: list[object]):
+    import cloudpickle
+
+    for op in ops:
+        try:
+            cloudpickle.dumps(op)
+        except TypeError as err:
+            raise AssertionError(f"Failed to pickle {op}: {err}")
