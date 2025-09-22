@@ -6,79 +6,116 @@ Created on Mon Sep  8 16:09:46 2025
 """
 
 import polars as pl
-import numpy as np
-
-uri = "sqlite:///C:/Users/alexa/Documents/VirtualCell/ensembl.sqlite"
-
-df = pl.read_database_uri(query="SELECT * FROM symbol_ensembl_map", uri=uri)
-
-# dataframe scheme
-canon_df_schema = {
-    "canon_ensembl_id": pl.String,
-    "gene": pl.String
-}
-
-canon_df = pl.DataFrame(schema=canon_df_schema)
-symbol_list = df['symbol_id'].unique()
+import scanpy as sc
 
 
-print(f"finding unique sets and assigning canonical ensembl id for {len(symbol_list)} gene symbols")
-for symbol in symbol_list:
-    #if gene symbol is already included, skip
-    if symbol in canon_df["gene"]:
-        continue
+def load_vcc(vcc_path: str) -> tuple[pl.DataFrame, dict, set]:
+    """Load VCC genes into Polars DataFrame and mapping dict."""
+    adata_vcc = sc.read_h5ad(vcc_path, backed='r')
+    vcc_mgene_df = pl.from_pandas(
+        adata_vcc.var.reset_index().rename(
+            columns={'index': 'symbol_id', 'gene_id': 'ensembl_gene_id'}
+        )
+    ).with_columns(pl.lit('vcc').alias('source'))
     
-    counter = 0
-    is_symbol = True
-    tmp_gene_list = np.array([symbol], dtype=object)
-    gene_list = np.array([], dtype=object)
+    vcc_dict = {
+        **dict(zip(vcc_mgene_df['ensembl_gene_id'], vcc_mgene_df['ensembl_gene_id'])),
+        **dict(zip(vcc_mgene_df['symbol_id'], vcc_mgene_df['ensembl_gene_id']))
+    }
+    return vcc_mgene_df, vcc_dict, set(vcc_dict.keys())
+
+
+def get_linked_genes(symbol: str, df: pl.DataFrame) -> tuple[list[str], int]:
+    """Expand a seed symbol into its connected symbol/ensembl set.
+    Returns (genes, number of iterations).
+    """
+    seen, frontier, is_symbol, counter = set(), {symbol}, True, 0
     
-    #if symbol is actually ensembl_id, search for associated ensembl ids, then run first iteration of while loop on ensembl_id list WITH symbol
-    if "ENSG" in symbol:
-        tmp_gene_list2 = np.unique(np.array(df.filter(pl.col("symbol_id") == symbol).select("ensembl_gene_id")["ensembl_gene_id"]))
-        tmp_gene_list = np.concatenate((tmp_gene_list, tmp_gene_list2))
-        is_symbol = False
-    
-    #get gene symbol from ensembl id and vice versa until no new elements are generated (reached the complete gene set associated with a given symbol)
-    while np.all(np.in1d(tmp_gene_list, gene_list)) == False:
-        new_gene_list = np.setdiff1d(tmp_gene_list, gene_list)
-        gene_list = np.unique(np.concatenate((gene_list, new_gene_list)))
-        
-        if is_symbol:
-            tmp_gene_list = np.array([], dtype=object)
-            for sym in new_gene_list:
-                #print(f"symbol: {sym}")
-                tmp_gene_list2 = np.unique(np.array(df.filter(pl.col("symbol_id") == sym).select("ensembl_gene_id")["ensembl_gene_id"]))
-                tmp_gene_list = np.concatenate((tmp_gene_list, tmp_gene_list2))
-                    
-        else:
-            tmp_gene_list = np.array([], dtype=object)
-            for ens in new_gene_list:
-                #print(f"ensembl id: {ens}")
-                tmp_gene_list2 = np.unique(np.array(df.filter(pl.col("ensembl_gene_id") == ens).select("symbol_id")["symbol_id"]))
-                tmp_gene_list = np.concatenate((tmp_gene_list, tmp_gene_list2))
-        is_symbol = not is_symbol  # toggle between gene symbol and ensembl id
+    while frontier:
         counter += 1
+        if is_symbol:
+            matches = df.filter(pl.col('symbol_id').is_in(frontier))['ensembl_gene_id'].to_list()
+        else:
+            matches = df.filter(pl.col('ensembl_gene_id').is_in(frontier))['symbol_id'].to_list()
+        next_frontier = set(matches) - seen
+        seen |= next_frontier
+        frontier = next_frontier
+        is_symbol = not is_symbol
     
-    #print(f"Iterations to complete set for {symbol}: {counter}")            
-    canon_ens_id = max([gene_id for gene_id in gene_list if "ENSG" in gene_id])
-    tmp_df =  pl.DataFrame({"canon_ensembl_id": canon_ens_id, "gene": np.unique(np.array(gene_list))}).unique()
-    canon_df = pl.concat([canon_df, tmp_df], how="vertical")
+    return list(seen | {symbol}), counter
+
+
+def assign_canon_id(genes: list[str], vcc_mgene_df: pl.DataFrame, vcc_dict: dict) -> tuple[str, bool, int]:
+    """Assign canonical ensembl ID for a set of genes.
+    Returns (canon_id, is_multi_vcc, n_vcc_in_set).
+    """
+    ens_ids = [g for g in genes if g.startswith('ENSG')]
+    vcc_filtered = vcc_mgene_df.filter(pl.col('ensembl_gene_id').is_in(genes))
+    n_vcc_in_set = vcc_filtered.height
     
+    # if set contains 1 vcc gene, override ensembl id to match vcc
+    if n_vcc_in_set == 1:
+        return vcc_filtered['ensembl_gene_id'][0], False, 1
+    # if set contains multiple vcc genes, separate them from the set and re-assign canon ensembl id for remaining genes
+    elif n_vcc_in_set > 1:
+        mapped = [vcc_dict.get(g) for g in genes if g in vcc_dict]
+        canon = mapped[0] if mapped else (max(ens_ids) if ens_ids else None)
+        return canon, True, n_vcc_in_set
+    else:
+        canon = max(ens_ids) if ens_ids else None
+        return canon, False, 0
+
+
+def main():
+    vcc_path = r'vcc_adata_Training.h5ad'
+    uri = 'sqlite:///ensembl.sqlite'
     
-    #print(f"canon ensembl id: {canon_ens_id}")
-    #print(f"gene list: {set(gene_list)}")
-    print(".")
+    vcc_mgene_df, vcc_dict, vcc_gene_set = load_vcc(vcc_path)
+    df = pl.concat([
+        pl.read_database_uri("SELECT * FROM symbol_ensembl_map", uri=uri),
+        vcc_mgene_df
+    ])
     
+    results, processed = [], set()
+    symbol_list = df['symbol_id'].unique().to_list()
+    multi_set_count, set_index = 0, 1
+    
+    print(f'finding unique sets and assigning canonical ensembl id for {len(symbol_list)} gene symbols')
+    
+    for i, symbol in enumerate(symbol_list, start=1):
+        print(f'finding set for symbol {i} of {len(symbol_list)}, {symbol}')
+        
+        # skip if gene already included
+        if symbol in processed:
+            continue
+        
+        genes, n_iters = get_linked_genes(symbol, df)
+        canon_id, is_multi, n_vcc = assign_canon_id(genes, vcc_mgene_df, vcc_dict)
+        if is_multi:
+            multi_set_count += 1
+        
+        processed |= set(genes)
+        n_genes = len(genes)
+        
+        tmp_df = pl.DataFrame({
+            'gene': genes,
+            'canon_ensembl_id': [canon_id] * n_genes,
+            'set_index': [set_index] * n_genes,
+            'total_set_iterations': [n_iters] * n_genes,
+            'n_genes': [n_genes] * n_genes,
+            'seed_symbol': [symbol] * n_genes,
+            'is_vcc_gene': [g in vcc_gene_set for g in genes],
+            'is_set_multi_vcc': [is_multi] * n_genes,
+            'n_vcc_in_set': [n_vcc] * n_genes,
+        })
+        results.append(tmp_df)
+        set_index += 1
+    
+    canon_df = pl.concat(results, how='vertical')
+    
+    print(f'there were {multi_set_count} sets with multiple vcc genes, which have been singluated')
+    canon_df.write_csv('canon_ensembl_map.csv')
 
-canon_df = canon_df.unique()
-print(canon_df)
 
-#check if there are any genes corresponding to multiple canon_ensembl_ids
-counts_canon = canon_df["gene"].value_counts(name="n_gene_occurrences")
-counts_of_counts_canon = counts_canon["n_gene_occurrences"].value_counts().sort("n_gene_occurrences")
-
-print(counts_of_counts_canon)
-
-canon_df_wcounts = counts_canon.join(canon_df, on="gene").sort("n_gene_occurrences")
-canon_df_wcounts.write_csv("C:/Users/alexa/Documents/VirtualCell/data_inves/canon_ensembl_map.csv")
+if __name__ == '__main__':
+    main()
