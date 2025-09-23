@@ -45,25 +45,66 @@ def get_linked_genes(symbol: str, df: pl.DataFrame) -> tuple[list[str], int]:
     return list(seen | {symbol}), counter
 
 
-def assign_canon_id(genes: list[str], vcc_mgene_df: pl.DataFrame, vcc_dict: dict) -> tuple[str, bool, int]:
-    """Assign canonical ensembl ID for a set of genes.
-    Returns (canon_id, is_multi_vcc, n_vcc_in_set).
+def assign_canon_id(gene_df: pl.DataFrame, vcc_mgene_df: pl.DataFrame, vcc_dict: dict) -> pl.DataFrame:
     """
-    ens_ids = [g for g in genes if g.startswith('ENSG')]
-    vcc_filtered = vcc_mgene_df.filter(pl.col('ensembl_gene_id').is_in(genes))
-    n_vcc_in_set = vcc_filtered.height
+    Assign canonical ensembl IDs:
+      - If exactly one VCC gene in set: all genes take that ensembl ID.
+      - If multiple VCC genes: each VCC gene gets its own ID, and all non-VCC genes
+        get the global max ENSG as their canon.
+      - If no VCC genes: canon is max ENSG in set (or None).
     
-    # if set contains 1 vcc gene, override ensembl id to match vcc
+    Returns a dataframe with [gene, canon_ensembl_id, is_multi, n_vcc_in_set].
+    """
+    # Which genes in this set are VCC?
+    vcc_filtered = vcc_mgene_df.filter(
+        vcc_mgene_df['ensembl_gene_id'].is_in(gene_df['gene'])
+    )
+    n_vcc_in_set = vcc_filtered.height
+
+    # Default canon = max ENSG in set
+    ens_ids = gene_df.filter(pl.col('gene').str.contains('ENSG'))['gene']
+    canon_default = ens_ids.max() if ens_ids.len() > 0 else None
+
     if n_vcc_in_set == 1:
-        return vcc_filtered['ensembl_gene_id'][0], False, 1
-    # if set contains multiple vcc genes, separate them from the set and re-assign canon ensembl id for remaining genes
+        # one vcc gene in set → everything mapped to its ensembl_id
+        vcc_canon = vcc_filtered['ensembl_gene_id'][0]
+        out = gene_df.select([
+            pl.col('gene'),
+            pl.lit(vcc_canon).alias('canon_ensembl_id')
+        ])
+
     elif n_vcc_in_set > 1:
-        mapped = [vcc_dict.get(g) for g in genes if g in vcc_dict]
-        canon = mapped[0] if mapped else (max(ens_ids) if ens_ids else None)
-        return canon, True, n_vcc_in_set
+        # multiple vcc genes → each vcc gene mapped individually, others get max ENSG
+        out = (
+            gene_df
+            .with_columns(
+                pl.col('gene')
+                .map_elements(lambda g: vcc_dict.get(g, None), return_dtype=pl.Utf8)
+                .alias('mapped_id')
+            )
+            .with_columns(
+                pl.when(pl.col('mapped_id').is_not_null())
+                .then(pl.col('mapped_id'))
+                .otherwise(pl.lit(canon_default))
+                .alias('canon_ensembl_id')
+            )
+            .select(['gene', 'canon_ensembl_id'])
+        )
+
     else:
-        canon = max(ens_ids) if ens_ids else None
-        return canon, False, 0
+        # no vcc genes → use max ENSG (or None)
+        out = gene_df.select([
+            pl.col('gene'),
+            pl.lit(canon_default).alias('canon_ensembl_id')
+        ])
+
+    # add flags
+    out = out.with_columns([
+        pl.lit(n_vcc_in_set).alias('n_vcc_in_set').cast(pl.Int32),
+        pl.lit(n_vcc_in_set > 1).alias('is_set_multi_vcc').cast(pl.Boolean)
+    ])
+
+    return out
 
 
 def main():
@@ -90,24 +131,25 @@ def main():
             continue
         
         genes, n_iters = get_linked_genes(symbol, df)
-        canon_id, is_multi, n_vcc = assign_canon_id(genes, vcc_mgene_df, vcc_dict)
-        if is_multi:
-            multi_set_count += 1
         
         processed |= set(genes)
         n_genes = len(genes)
         
         tmp_df = pl.DataFrame({
             'gene': genes,
-            'canon_ensembl_id': [canon_id] * n_genes,
             'set_index': [set_index] * n_genes,
             'total_set_iterations': [n_iters] * n_genes,
             'n_genes': [n_genes] * n_genes,
             'seed_symbol': [symbol] * n_genes,
-            'is_vcc_gene': [g in vcc_gene_set for g in genes],
-            'is_set_multi_vcc': [is_multi] * n_genes,
-            'n_vcc_in_set': [n_vcc] * n_genes,
+            'is_vcc_gene': [g in vcc_gene_set for g in genes]
         })
+        
+        canon_assignments = assign_canon_id(tmp_df, vcc_mgene_df, vcc_dict)
+        tmp_df = tmp_df.join(canon_assignments, on='gene', how='left')
+        
+        if tmp_df['is_set_multi_vcc'][0]:
+            multi_set_count += 1
+        
         results.append(tmp_df)
         set_index += 1
     
