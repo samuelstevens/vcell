@@ -203,7 +203,9 @@ def solo_hvgs(
             return
         order = info["recommended_stream"]
         summary = ", ".join(f"{key}='{value}'" for key, value in info.items() if value)
-        print(f"Based on this info: {summary},this script will iterate over '{order}'.")
+        print(
+            f"Based on this info: {summary}, this script will iterate over '{order}'."
+        )
 
     elif info["recommended_stream"] != order:
         print(

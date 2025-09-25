@@ -1,0 +1,15 @@
+[[datasets]]
+h5ad_fpath = "data/inputs/vcc/adata_Training.h5ad"
+hvgs_fpath = "data/cached/vcc/adata_Training.json"
+pert_col = "target_gene"
+ctrl_label = "non-targeting"
+gene_id_col = "gene_id"
+group_by = ["batch"]
+
+# [[datasets]]
+# h5ad_fpath = "data/inputs/vcc/adata_Training.h5ad"
+# hvgs_fpath = "data/cached/scperturb/NadigOConner2024_hepg2.json"
+# pert_col = "target_gene"
+# ctrl_label = "non-targeting"
+# gene_id_col = "gene_id"
+# group_by = ["batch"]

@@ -3,7 +3,6 @@ import collections
 import dataclasses
 import pathlib
 import re
-import typing as tp
 
 import anndata as ad
 import beartype
@@ -54,7 +53,7 @@ class GeneVocab:
 
         self.n_genes = vcc.n_vars
 
-        self.vcc_ens: list[str] = [_strip_ens_version(s) for s in vcc.var["gene_id"]]
+        self.vcc_ens: list[str] = [strip_ens_version(s) for s in vcc.var["gene_id"]]
         self.vcc_sym: list[str] = vcc.var.index.astype(str).tolist()
 
         # Ensembl -> VCC index (unique by construction)
@@ -64,35 +63,13 @@ class GeneVocab:
         for i, s in enumerate(self.vcc_sym):
             self._sym_to_idxs[s].append(i)
 
-    def make_map(
-        self, ds: ad.AnnData, dup_mode: tp.Literal["sum", "keep", None] = None
-    ) -> GeneMap:
+    def make_map(self, ds: ad.AnnData, *, gene_id_col: str = "ensembl_id") -> GeneMap:
         """
         Create a GeneMap from a dataset.
         """
 
-        if dup_mode is None:
-            # Try to figure out whether we have raw counts (integers) or log-normalized counts (floats, smaller).
-            row = ds.X[0]
-            row = row.toarray() if hasattr(row, "toarray") else np.asarray(row)
-            if row.max() > 100:
-                # Probably raw counts
-                dup_mode = "sum"
-            elif row[row > 1].min() < 2.0:
-                dup_mode = "keep"
-            else:
-                if ds.isbacked:
-                    self.logger.warning(
-                        "Not sure whether ds '%s' is raw counts or log normalized.",
-                        ds.filename,
-                    )
-                else:
-                    self.logger.warning(
-                        "Not sure whether ds is raw counts or log normalized."
-                    )
-
         ds_sym = list(ds.var_names)
-        ds_ens = [_strip_ens_version(s) for s in ds.var["ensembl_id"].tolist()]
+        ds_ens = [strip_ens_version(s) for s in ds.var[gene_id_col].tolist()]
 
         assert len(ds_sym) == len(ds_ens)
 
@@ -144,6 +121,6 @@ class GeneVocab:
 
 
 @beartype.beartype
-def _strip_ens_version(s: str) -> str:
+def strip_ens_version(s: str) -> str:
     """ENSG00000187634.5 -> ENSG00000187634"""
     return re.sub(r"\.\d+$", "", s)
