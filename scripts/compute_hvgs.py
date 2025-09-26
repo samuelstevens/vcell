@@ -2,7 +2,6 @@
 Compute HVGs.
 """
 
-import json
 import logging
 import pathlib
 import typing as tp
@@ -27,44 +26,34 @@ logging.basicConfig(level=logging.INFO, format=log_format)
 def plot_hvgs(
     file: pathlib.Path,
     dump_to: pathlib.Path | None = None,
-    n_top_genes: int | None = None,
+    n_top_genes: int = 2_000,
 ):
     """
     Create a scatter plot showing HVGs vs other genes on log(mean) vs log(variance).
 
     Args:
-        file: Path to JSON file with HVG results
+        file: Path to CSV file with HVG results
         dump_to: Directory to save the plot (defaults to file's parent directory)
         n_top_genes: Number of HVGs for the title (defaults to count in the JSON)
     """
-    import pandas as pd
+    import polars as pl
 
     # Load HVG results from JSON
-    hvg_df = pd.read_json(file, orient="index")
+    hvg_df = pl.read_csv(file)
 
     # Set defaults
     if dump_to is None:
         dump_to = file.parent
 
-    means = hvg_df["means"].values
-    variances = hvg_df["variances"].values
+    means = hvg_df.get_column("means").to_numpy()
+    variances = hvg_df.get_column("variances").to_numpy()
+    variances_normalized = hvg_df.get_column("variances_normalized").to_numpy()
 
-    # Determine which genes to mark as HVG based on n_top_genes
-    if n_top_genes is None:
-        # Use the HVG labels from the dataframe
-        n_top_genes = hvg_df["highly_variable"].sum()
-        hvg_mask = hvg_df["highly_variable"].values
-    else:
-        # Re-select top N genes based on variances_norm
-        if "variances_norm" in hvg_df.columns:
-            # Use variance residuals for selection
-            top_indices = np.argsort(hvg_df["variances_norm"].values)[-n_top_genes:]
-            hvg_mask = np.zeros(len(hvg_df), dtype=bool)
-            hvg_mask[top_indices] = True
-        else:
-            # Fallback to using existing highly_variable column
-            hvg_mask = hvg_df["highly_variable"].values
-            n_top_genes = hvg_mask.sum()
+    # Re-select top N genes based on variances_norm
+    # Use variance residuals for selection
+    top_indices = np.argsort(variances_normalized)[-n_top_genes:]
+    hvg_mask = np.zeros(hvg_df.height, dtype=bool)
+    hvg_mask[top_indices] = True
 
     # Compute log values with small epsilon for numerical stability
     eps = 1e-12
@@ -224,119 +213,12 @@ def solo_hvgs(
     dump_to.mkdir(parents=True, exist_ok=True)
 
     # Save HVG results as JSON
-    json_path = dump_to / f"{h5.stem}.json"
-    hvgs.to_json(json_path, orient="index")
-    print(f"Saved HVG results to {json_path}")
+    csv_path = dump_to / f"{h5.stem}.csv"
+    hvgs.to_csv(csv_path)
+    print(f"Saved HVG results to {csv_path}")
 
     # Create and save visualization
-    plot_hvgs(json_path, dump_to, n_top_genes=2_000)
-
-
-@beartype.beartype
-def canonicalize(
-    h5: pathlib.Path, dump_to: pathlib.Path, mod: str = "", gene_id_col: str = ""
-):
-    if h5.suffix == ".h5ad":
-        adata = ad.read_h5ad(h5, backed="r")
-    elif h5.suffix == ".h5mu":
-        mdata = md.read_h5mu(h5, backed="r")
-
-        if mdata.n_mod == 1 and not mod:
-            mod = mdata.mod_names[0]
-            print(f"Assigning mod='{mod}'.")
-
-        if not mod:
-            print(f"Need to pass --mod. Available: {mdata.mod_names}")
-            return
-
-        if mod not in mdata.mod:
-            print(f"Unknown modality --mod '{mod}'. Available: {mdata.mod_names}")
-            return
-
-        adata = mdata.mod[mod]
-    else:
-        print(f"Unknown file type '{h5.suffix}'")
-        return
-
-    # Validate gene_id_col
-    if gene_id_col:
-        if gene_id_col not in adata.var.columns:
-            print(f"Error: gene_id_col '{gene_id_col}' not found in adata.var.")
-            print(f"Available columns: {list(adata.var.columns)}")
-            return
-    else:
-        # If gene_id_col is empty, list all columns and let user choose
-        print("No gene_id_col specified. Available columns in adata.var:")
-        print()
-
-        # Get up to 3 example values for each column
-        n_examples = min(3, len(adata.var))
-        for i, col in enumerate(adata.var.columns, 1):
-            # Get example values, handling different data types
-            try:
-                examples = adata.var[col].iloc[:n_examples].tolist()
-                # Format examples nicely, truncating long strings
-                formatted_examples = []
-                for ex in examples:
-                    if ex is None or (isinstance(ex, float) and np.isnan(ex)):
-                        formatted_examples.append("NaN")
-                    elif isinstance(ex, str) and len(ex) > 30:
-                        formatted_examples.append(f"{ex[:27]}...")
-                    else:
-                        formatted_examples.append(str(ex))
-                examples_str = ", ".join(formatted_examples)
-                print(f"  {i}. {col:<30} (examples: {examples_str})")
-            except Exception:
-                print(f"  {i}. {col:<30} (could not get examples)")
-
-        while True:
-            user_input = input(
-                "\nEnter column name (or press Enter to skip gene_id mapping): "
-            ).strip()
-
-            if not user_input:
-                # User wants to skip - confirm this choice
-                confirm = (
-                    input("Are you sure you want to skip gene_id mapping? (y/n): ")
-                    .strip()
-                    .lower()
-                )
-                if confirm == "y":
-                    gene_id_col = ""
-                    print("Proceeding without gene_id mapping.")
-                    break
-                else:
-                    continue
-            elif user_input in adata.var.columns:
-                gene_id_col = user_input
-                print(f"Using gene_id_col: '{gene_id_col}'")
-                break
-            else:
-                print(f"Invalid column name '{user_input}'. Please try again.")
-
-    # The client object uses threads, but also avoid going over rate limits. Since we will likely be IO-bound, I'm not worried about using a single process. But we can submit many requests all at once, then try to start getting the results.
-    with (
-        vcell.pp.ensembl.EnsemblQueryPool() as pool,
-        open(dump_to / f"{h5.stem}_symbols.jsonl", "w") as fd,
-    ):
-        futures = [
-            pool.submit(f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{index}")
-            for index, row in adata.var.iterrows()
-        ]
-        for fut, (index, row) in zip(
-            vcell.helpers.progress(futures, desc="ensembl"), adata.var.iterrows()
-        ):
-            err = fut.exception()
-            if err is not None:
-                print(f"Failed on {index}: {err}")
-                continue
-
-            result = fut.result()
-            output_dict = {"ensembl": result, "symbol": index}
-            # Only add gene_id if gene_id_col is specified
-            if gene_id_col:
-                output_dict["gene_id"] = row[gene_id_col]
-            fd.write(json.dumps(output_dict) + "\n")
+    plot_hvgs(csv_path, dump_to, n_top_genes=2_000)
 
 
 def describe_layout(x):
@@ -475,5 +357,4 @@ if __name__ == "__main__":
     tyro.extras.subcommand_cli_from_dict({
         "solo-hvgs": solo_hvgs,
         "plot-hvgs": plot_hvgs,
-        "canonicalize": canonicalize,
     })

@@ -27,7 +27,7 @@ def _compute_seurat_v3_variances(
 
     Returns:
         variances: Standardized variances (residuals from the trend)
-        variances_norm: Normalized variances used for ranking
+        variances_normalized: Normalized variances used for ranking
     """
     # Filter to genes with non-zero variance to avoid log(0)
     mask = variances_cp10k > 0
@@ -88,10 +88,10 @@ def _compute_seurat_v3_variances(
     variances_standardized[mask] = variances_cp10k[mask] / (std_factor**2)
 
     # For normalized variances used in ranking, compute residuals in log space
-    variances_norm = np.zeros_like(means_raw)
-    variances_norm[mask] = log_vars - expected_log_vars
+    variances_normalized = np.zeros_like(means_raw)
+    variances_normalized[mask] = log_vars - expected_log_vars
 
-    return variances_standardized, variances_norm
+    return variances_standardized, variances_normalized
 
 
 @beartype.beartype
@@ -107,7 +107,7 @@ def highly_variable_genes_seurat_v3_rows(
     """
     Compute Seurat v3 HVGs by streaming rows (cells). Efficient for CSR/row-major data.
 
-    Returns DataFrame with 'means', 'variances', 'variances_norm', 'highly_variable'.
+    Returns DataFrame with 'means', 'variances', 'variances_normalized', 'highly_variable'.
     """
     n_cells, n_genes = adata.shape
 
@@ -149,14 +149,14 @@ def highly_variable_genes_seurat_v3_rows(
         variances_cp10k = variances_cp10k * n_cells / (n_cells - 1)
 
     # Compute Seurat v3 standardized variances
-    variances, variances_norm = _compute_seurat_v3_variances(
+    variances, variances_normalized = _compute_seurat_v3_variances(
         means_raw_g, variances_cp10k, n_cells, span
     )
 
     # Select top genes
     highly_variable = np.zeros(n_genes, dtype=bool)
     if n_top_genes is not None:
-        top_indices = np.argsort(variances_norm)[-n_top_genes:]
+        top_indices = np.argsort(variances_normalized)[-n_top_genes:]
         highly_variable[top_indices] = True
 
     # Create DataFrame
@@ -171,7 +171,7 @@ def highly_variable_genes_seurat_v3_rows(
         {
             "means": means_raw_g,
             "variances": variances_raw,  # Raw variances for plotting
-            "variances_norm": variances_norm,
+            "variances_normalized": variances_normalized,
             "highly_variable": highly_variable,
         },
         index=adata.var_names,
@@ -194,7 +194,7 @@ def highly_variable_genes_seurat_v3_cols(
     Compute Seurat v3 HVGs by streaming columns (genes). Efficient for CSC/col-major data.
     Makes two passes: first to compute library sizes, then to compute statistics.
 
-    Returns DataFrame with 'means', 'variances', 'variances_norm', 'highly_variable'.
+    Returns DataFrame with 'means', 'variances', 'variances_normalized', 'highly_variable'.
     """
     n_cells, n_genes = adata.shape
 
@@ -258,14 +258,14 @@ def highly_variable_genes_seurat_v3_cols(
         variances_cp10k = variances_cp10k * n_cells / (n_cells - 1)
 
     # Compute Seurat v3 standardized variances
-    variances, variances_norm = _compute_seurat_v3_variances(
+    variances, variances_normalized = _compute_seurat_v3_variances(
         means_raw, variances_cp10k, n_cells, span
     )
 
     # Select top genes
     highly_variable = np.zeros(n_genes, dtype=bool)
     if n_top_genes is not None:
-        top_indices = np.argsort(variances_norm)[-n_top_genes:]
+        top_indices = np.argsort(variances_normalized)[-n_top_genes:]
         highly_variable[top_indices] = True
 
     # Create DataFrame
@@ -279,7 +279,7 @@ def highly_variable_genes_seurat_v3_cols(
         {
             "means": means_raw,
             "variances": variances_raw,  # Raw variances for plotting
-            "variances_norm": variances_norm,
+            "variances_normalized": variances_normalized,
             "highly_variable": highly_variable,
         },
         index=adata.var_names,

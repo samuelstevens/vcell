@@ -10,6 +10,7 @@ import time
 import typing as tp
 
 import beartype
+import pandas as pd
 import requests
 
 from .. import helpers
@@ -391,6 +392,350 @@ def get_db(dir: str | os.PathLike) -> sqlite3.Connection:
 
 
 @beartype.beartype
+@dataclasses.dataclass(frozen=True)
+class DatasetInfo:
+    """Information about a dataset in the database."""
+
+    dataset_id: int
+    """The database ID of this dataset."""
+
+    name: str
+    """The file path of the dataset."""
+
+    symbol_count: int
+    """Number of symbols in this dataset."""
+
+    is_new: bool
+    """Whether this is a newly created dataset."""
+
+
+@beartype.beartype
+@dataclasses.dataclass(frozen=True)
+class SymbolInfo:
+    """Information about a symbol to process."""
+
+    symbol_id: str
+    """The symbol name (gene name)."""
+
+    row: tp.Any
+    """The row from adata.var."""
+
+    needs_api_call: bool
+    """Whether this symbol needs an API call."""
+
+
+@beartype.beartype
+def load_adata(h5_fpath: pathlib.Path, mod: str = ""):
+    """Load AnnData from h5ad or h5mu file.
+
+    Returns None if file type is unsupported or modality is missing.
+    """
+    import anndata as ad
+    import mudata as md
+
+    if h5_fpath.suffix == ".h5ad":
+        return ad.read_h5ad(h5_fpath, backed="r")
+
+    if h5_fpath.suffix != ".h5mu":
+        print(f"Unknown file type '{h5_fpath.suffix}'")
+        return None
+
+    # Handle h5mu files
+    mdata = md.read_h5mu(h5_fpath, backed="r")
+
+    # Auto-select if only one modality
+    if mdata.n_mod == 1 and not mod:
+        mod = mdata.mod_names[0]
+        print(f"Assigning mod='{mod}'.")
+
+    if not mod:
+        print(f"Need to pass --mod. Available: {mdata.mod_names}")
+        return None
+
+    if mod not in mdata.mod:
+        print(f"Unknown modality --mod '{mod}'. Available: {mdata.mod_names}")
+        return None
+
+    return mdata.mod[mod]
+
+
+@beartype.beartype
+def get_gene_id_column(adata, gene_id_col: str = "") -> str:
+    """Get or prompt for gene_id column.
+
+    Returns empty string if user chooses to skip.
+    """
+    import numpy as np
+
+    # If specified, validate it exists
+    if gene_id_col:
+        if gene_id_col not in adata.var.columns:
+            print(f"Error: gene_id_col '{gene_id_col}' not found in adata.var.")
+            print(f"Available columns: {list(adata.var.columns)}")
+            return ""  # Invalid column
+        return gene_id_col
+
+    # Otherwise prompt user
+    print("No gene_id_col specified.")
+
+    def display_column(col):
+        """Format column with example values."""
+        n_examples = min(3, len(adata.var))
+        try:
+            examples = adata.var[col].iloc[:n_examples].tolist()
+            formatted = []
+            for ex in examples:
+                if ex is None or (isinstance(ex, float) and np.isnan(ex)):
+                    formatted.append("NaN")
+                elif isinstance(ex, str) and len(ex) > 30:
+                    formatted.append(f"{ex[:27]}...")
+                else:
+                    formatted.append(str(ex))
+            return f"{col:<30} (examples: {', '.join(formatted)})"
+        except Exception:
+            return f"{col:<30} (could not get examples)"
+
+    selected = tui.prompt_selection_from_list(
+        "Available columns in adata.var:",
+        list(adata.var.columns),
+        display_func=display_column,
+        allow_skip=True,
+        skip_label="Skip gene_id mapping",
+    )
+
+    if selected is None:
+        if tui.prompt_yes_no("Are you sure you want to skip gene_id mapping?"):
+            print("Proceeding without gene_id mapping.")
+            return ""
+        # User changed mind, prompt again
+        return get_gene_id_column(adata, "")
+
+    print(f"Using gene_id_col: '{selected}'")
+    return selected
+
+
+@beartype.beartype
+def prompt_dataset_mode(symbol_count: int) -> str:
+    """Prompt user for how to handle existing dataset."""
+    choices = [
+        tui.Choice(
+            key="1",
+            value="update",
+            label="update",
+            description="Add new symbols to existing dataset",
+        ),
+        tui.Choice(
+            key="2",
+            value="replace",
+            label="replace",
+            description="Delete existing dataset and reimport",
+            requires_confirmation=True,
+            confirmation_prompt=f"Are you sure you want to delete {symbol_count} existing symbols? (y/n): ",
+        ),
+        tui.Choice(
+            key="3",
+            value="new",
+            label="new",
+            description="Create a new dataset entry",
+        ),
+    ]
+
+    return tui.prompt_choice(
+        "How would you like to proceed?", choices=choices, default="update"
+    )
+
+
+@beartype.beartype
+def get_or_create_dataset(
+    db: sqlite3.Connection, h5_fpath: pathlib.Path, gene_id_col: str, mode: str = ""
+) -> DatasetInfo | None:
+    """Get or create a dataset in the database.
+
+    Returns None if mode is invalid.
+    """
+    normalized_path = str(h5_fpath.resolve())
+
+    # Check for existing dataset
+    existing = db.execute(
+        "SELECT dataset_id, name FROM datasets WHERE name = ? AND (gene_id_col = ? OR (gene_id_col IS NULL AND ? IS NULL))",
+        (normalized_path, gene_id_col or None, gene_id_col or None),
+    ).fetchone()
+
+    if not existing:
+        # No existing dataset - create new one
+        print(f"\nNo existing dataset found for {normalized_path}")
+        print("Creating new dataset entry...")
+        cursor = db.execute(
+            "INSERT INTO datasets(name, gene_id_col) VALUES(?, ?)",
+            (normalized_path, gene_id_col or None),
+        )
+        dataset_id = cursor.lastrowid
+        db.commit()
+        if dataset_id is None:
+            raise RuntimeError("Failed to create dataset")
+        print(f"Created new dataset with ID: {dataset_id}")
+        return DatasetInfo(dataset_id, normalized_path, 0, True)
+
+    # Dataset exists - handle based on mode
+    dataset_id = existing[0]
+    print(f"\nFound existing dataset (ID: {dataset_id}) for {existing[1]}")
+
+    symbol_count = db.execute(
+        "SELECT COUNT(*) FROM dataset_symbols WHERE dataset_id = ?", (dataset_id,)
+    ).fetchone()[0]
+    print(f"  Currently contains {symbol_count} symbols")
+
+    # Get mode if not specified
+    if not mode:
+        mode = prompt_dataset_mode(symbol_count)
+        print(f"Using {mode} mode.")
+
+    # Apply mode
+    if mode == "update":
+        print(f"Updating existing dataset {dataset_id}")
+        return DatasetInfo(dataset_id, normalized_path, symbol_count, False)
+
+    if mode == "replace":
+        print(f"Replacing dataset {dataset_id}, deleting {symbol_count} symbols...")
+        db.execute("DELETE FROM dataset_symbols WHERE dataset_id = ?", (dataset_id,))
+        db.commit()
+        print("Existing symbols deleted.")
+        return DatasetInfo(dataset_id, normalized_path, 0, False)
+
+    if mode == "new":
+        print("Creating new dataset entry...")
+        cursor = db.execute(
+            "INSERT INTO datasets(name, gene_id_col) VALUES(?, ?)",
+            (normalized_path, gene_id_col or None),
+        )
+        dataset_id = cursor.lastrowid
+        db.commit()
+        if dataset_id is None:
+            raise RuntimeError("Failed to create dataset")
+        print(f"Created new dataset with ID: {dataset_id}")
+        return DatasetInfo(dataset_id, normalized_path, 0, True)
+
+    print(f"Invalid mode '{mode}'. Must be 'update', 'replace', or 'new'.")
+    return None
+
+
+@beartype.beartype
+def prepare_symbols(
+    db: sqlite3.Connection, var_list: list[tuple[str, tp.Any]], dataset_id: int
+) -> list[SymbolInfo]:
+    """Prepare symbols for processing, determining which need API calls.
+
+    Returns list of SymbolInfo objects that need processing.
+    """
+    symbols_to_process = []
+    symbols_with_mappings = 0
+
+    gene_symbol_stmt = "INSERT OR IGNORE INTO gene_symbols(symbol_id) VALUES(?)"
+    dataset_symbol_stmt = "INSERT OR IGNORE INTO dataset_symbols(symbol_id, dataset_id, original_gene_id) VALUES(?, ?, ?)"
+
+    for symbol_id, row in var_list:
+        # Check if symbol exists in gene_symbols
+        existing = db.execute(
+            "SELECT symbol_id FROM gene_symbols WHERE symbol_id = ?",
+            (symbol_id,),
+        ).fetchone()
+
+        if existing:
+            # Symbol exists, check if it has mappings
+            mapping_count = db.execute(
+                "SELECT COUNT(*) FROM symbol_ensembl_map WHERE symbol_id = ?",
+                (symbol_id,),
+            ).fetchone()[0]
+
+            if mapping_count > 0:
+                symbols_with_mappings += 1
+                # Still need to add to dataset_symbols if not already there
+                db.execute(dataset_symbol_stmt, (symbol_id, dataset_id, None))
+                db.commit()
+                continue  # Skip API call for this symbol
+
+            needs_api = True
+        else:
+            # Create new symbol
+            db.execute(gene_symbol_stmt, (symbol_id,))
+            db.commit()
+            needs_api = True
+
+        # Add to dataset_symbols
+        db.execute(dataset_symbol_stmt, (symbol_id, dataset_id, None))
+        db.commit()
+
+        symbols_to_process.append(SymbolInfo(symbol_id, row, needs_api))
+
+    if symbols_with_mappings > 0:
+        print(
+            f"Skipping {symbols_with_mappings} symbols that already have Ensembl mappings"
+        )
+
+    return symbols_to_process
+
+
+@beartype.beartype
+def process_ensembl_result(
+    db: sqlite3.Connection,
+    symbol_info: SymbolInfo,
+    api_result: list[dict],
+    dataset_id: int,
+    gene_id_col: str = "",
+) -> None:
+    """Process Ensembl API result and update database."""
+    ensembl_stmt = (
+        "INSERT OR IGNORE INTO ensembl_genes(ensembl_gene_id, name) VALUES(?, ?)"
+    )
+    map_stmt = "INSERT OR IGNORE INTO symbol_ensembl_map(symbol_id, ensembl_gene_id, source) VALUES(?, ?, ?)"
+
+    for item in api_result:
+        if item.get("type") != "gene":
+            continue
+
+        gene_id = item.get("id", "")
+        if not gene_id:
+            continue
+
+        # Store full ID with version suffix
+        ensembl_gene_id = gene_id
+
+        # Insert ensembl gene
+        db.execute(ensembl_stmt, (ensembl_gene_id, item.get("description", "")))
+        db.commit()  # Commit immediately to ensure the gene exists
+
+        # Verify the gene was inserted or already exists
+        exists = db.execute(
+            "SELECT ensembl_gene_id FROM ensembl_genes WHERE ensembl_gene_id = ?",
+            (ensembl_gene_id,),
+        ).fetchone()
+
+        if exists:
+            # Create mapping
+            db.execute(
+                map_stmt, (symbol_info.symbol_id, ensembl_gene_id, "ensembl_xrefs")
+            )
+
+    # If we have a gene_id column, update original_gene_id in dataset_symbols
+    if gene_id_col and hasattr(symbol_info.row, "__getitem__"):
+        original_id = symbol_info.row.get(gene_id_col)
+        if original_id and not pd.isna(original_id):
+            # First ensure the original ID exists in ensembl_genes
+            original_id_str = str(original_id)
+            db.execute(
+                "INSERT OR IGNORE INTO ensembl_genes(ensembl_gene_id, name) VALUES(?, ?)",
+                (original_id_str, None),
+            )
+            # Now safe to update dataset_symbols
+            db.execute(
+                "UPDATE dataset_symbols SET original_gene_id = ? WHERE symbol_id = ? AND dataset_id = ?",
+                (original_id_str, symbol_info.symbol_id, dataset_id),
+            )
+
+    db.commit()
+
+
+@beartype.beartype
 def canonicalize(
     h5: pathlib.Path,
     dump_to: pathlib.Path,
@@ -399,7 +744,7 @@ def canonicalize(
     mode: str = "",
     n_rows: int = 0,
 ):
-    """Canonicalize gene symbols to Ensembl IDs.
+    """Canonicalize gene symbols to Ensembl IDs with cleaner structure.
 
     Args:
         h5: Path to the h5ad or h5mu file
@@ -407,190 +752,39 @@ def canonicalize(
         mod: Modality to use (for h5mu files)
         gene_id_col: Column in adata.var containing gene IDs
         mode: How to handle existing datasets:
-            - "update": Add new symbols to existing dataset (default)
+            - "update": Add new symbols to existing dataset
             - "replace": Delete and recreate existing dataset
             - "new": Always create a new dataset
             - (empty): Ask user interactively
         n_rows: Number of rows to process (0 for all rows)
     """
+    # I ran:
+    #
+    # uv run ensembl canonicalize --h5 /Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_jurkat.h5ad --dump-to data/cached/ --gene-id-col ensembl_id --mode update
+    # uv run ensembl canonicalize --h5 /Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_hepg2.h5ad --dump-to data/cached/ --gene-id-col ensembl_id --mode update
+    # uv run ensembl canonicalize --h5 /Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_essential.h5ad --dump-to data/cached/ --gene-id-col ensembl_id --mode update
+    # uv run ensembl canonicalize --h5 /Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_gwps.h5ad --dump-to data/cached/ --gene-id-col ensembl_id --mode update
+    # uv run ensembl canonicalize --h5 /Volumes/samuel-stevens-2TB/datasets/KOLF_Pan_Genome_Aggregate.h5mu --dump-to data/cached/ --mod rna --gene-id-col gene_ids --mode update
+    # uv run ensembl canonicalize --h5 data/inputs/vcc/adata_Training.h5ad --dump-to data/cached/ --gene-id-col gene_ids --mode update
 
-    import anndata as ad
-    import mudata as md
-    import numpy as np
+    import itertools
 
-    if h5.suffix == ".h5ad":
-        adata = ad.read_h5ad(h5, backed="r")
-    elif h5.suffix == ".h5mu":
-        mdata = md.read_h5mu(h5, backed="r")
-
-        if mdata.n_mod == 1 and not mod:
-            mod = mdata.mod_names[0]
-            print(f"Assigning mod='{mod}'.")
-
-        if not mod:
-            print(f"Need to pass --mod. Available: {mdata.mod_names}")
-            return
-
-        if mod not in mdata.mod:
-            print(f"Unknown modality --mod '{mod}'. Available: {mdata.mod_names}")
-            return
-
-        adata = mdata.mod[mod]
-    else:
-        print(f"Unknown file type '{h5.suffix}'")
+    # Step 1: Load the data
+    adata = load_adata(h5, mod)
+    if adata is None:
         return
 
-    # Validate gene_id_col
-    if gene_id_col:
-        if gene_id_col not in adata.var.columns:
-            print(f"Error: gene_id_col '{gene_id_col}' not found in adata.var.")
-            print(f"Available columns: {list(adata.var.columns)}")
-            return
-    else:
-        # If gene_id_col is empty, list all columns and let user choose
-        print("No gene_id_col specified.")
+    # Step 2: Get gene_id column
+    gene_id_col = get_gene_id_column(adata, gene_id_col)
 
-        # Build display function for columns with examples
-        def display_column(col):
-            n_examples = min(3, len(adata.var))
-            try:
-                examples = adata.var[col].iloc[:n_examples].tolist()
-                # Format examples nicely, truncating long strings
-                formatted_examples = []
-                for ex in examples:
-                    if ex is None or (isinstance(ex, float) and np.isnan(ex)):
-                        formatted_examples.append("NaN")
-                    elif isinstance(ex, str) and len(ex) > 30:
-                        formatted_examples.append(f"{ex[:27]}...")
-                    else:
-                        formatted_examples.append(str(ex))
-                examples_str = ", ".join(formatted_examples)
-                return f"{col:<30} (examples: {examples_str})"
-            except Exception:
-                return f"{col:<30} (could not get examples)"
-
-        # Prompt user to select a column
-        selected_col = tui.prompt_selection_from_list(
-            "Available columns in adata.var:",
-            list(adata.var.columns),
-            display_func=display_column,
-            allow_skip=True,
-            skip_label="Skip gene_id mapping",
-        )
-
-        if selected_col is None:
-            # User wants to skip - confirm this choice
-            if tui.prompt_yes_no("Are you sure you want to skip gene_id mapping?"):
-                gene_id_col = ""
-                print("Proceeding without gene_id mapping.")
-            else:
-                # Recursive call to try again
-                return canonicalize(h5, dump_to, mod, "", mode, n_rows)
-        else:
-            gene_id_col = selected_col
-            print(f"Using gene_id_col: '{gene_id_col}'")
-
+    # Step 3: Setup database and dataset
     db = get_db(dump_to)
+    dataset_info = get_or_create_dataset(db, h5, gene_id_col, mode)
+    if dataset_info is None:
+        return
 
-    # Normalize path for consistent comparison
-    normalized_path = str(h5.resolve())
-
-    # Check if dataset already exists
-    existing = db.execute(
-        "SELECT dataset_id, name FROM datasets WHERE name = ? AND (gene_id_col = ? OR (gene_id_col IS NULL AND ? IS NULL))",
-        (
-            normalized_path,
-            gene_id_col if gene_id_col else None,
-            gene_id_col if gene_id_col else None,
-        ),
-    ).fetchone()
-
-    if existing:
-        dataset_id = existing[0]
-        print(f"\nFound existing dataset (ID: {dataset_id}) for {existing[1]}")
-
-        # Get symbol count for this dataset
-        symbol_count = db.execute(
-            "SELECT COUNT(*) FROM symbols WHERE dataset_id = ?", (dataset_id,)
-        ).fetchone()[0]
-        print(f"  Currently contains {symbol_count} symbols")
-
-        # Handle mode selection
-        if not mode:
-            # Interactive mode selection
-            choices = [
-                tui.Choice(
-                    key="1",
-                    value="update",
-                    label="update",
-                    description="Add new symbols to existing dataset",
-                ),
-                tui.Choice(
-                    key="2",
-                    value="replace",
-                    label="replace",
-                    description="Delete existing dataset and reimport",
-                    requires_confirmation=True,
-                    confirmation_prompt=f"Are you sure you want to delete {symbol_count} existing symbols? (y/n): ",
-                ),
-                tui.Choice(
-                    key="3",
-                    value="new",
-                    label="new",
-                    description="Create a new dataset entry",
-                ),
-            ]
-
-            mode = tui.prompt_choice(
-                "How would you like to proceed?", choices=choices, default="update"
-            )
-            print(f"Using {mode} mode.")
-
-        # Apply the selected mode
-        if mode == "update":
-            print(f"Updating existing dataset {dataset_id}")
-            # dataset_id already set, nothing more to do
-        elif mode == "replace":
-            print(f"Replacing dataset {dataset_id}, deleting {symbol_count} symbols...")
-            db.execute("DELETE FROM symbols WHERE dataset_id = ?", (dataset_id,))
-            db.commit()
-            print("Existing symbols deleted.")
-            # dataset_id already set, will reuse it
-        elif mode == "new":
-            print("Creating new dataset entry...")
-            # Insert new dataset
-            dataset_stmt = "INSERT INTO datasets(name, gene_id_col) VALUES(?, ?)"
-            cursor = db.execute(
-                dataset_stmt, (normalized_path, gene_id_col if gene_id_col else None)
-            )
-            dataset_id = cursor.lastrowid
-            db.commit()
-            print(f"Created new dataset with ID: {dataset_id}")
-        else:
-            print(f"Invalid mode '{mode}'. Must be 'update', 'replace', or 'new'.")
-            return
-    else:
-        # No existing dataset, create new one
-        print(f"\nNo existing dataset found for {normalized_path}")
-        print("Creating new dataset entry...")
-        dataset_stmt = "INSERT INTO datasets(name, gene_id_col) VALUES(?, ?)"
-        cursor = db.execute(
-            dataset_stmt, (normalized_path, gene_id_col if gene_id_col else None)
-        )
-        dataset_id = cursor.lastrowid
-        db.commit()
-        print(f"Created new dataset with ID: {dataset_id}")
-
-    symbol_stmt = "INSERT OR IGNORE INTO symbols(name, dataset_id, included_ensembl_id) VALUES(?, ?, ?)"
-    ensembl_stmt = "INSERT OR IGNORE INTO ensembl_genes(gene_id, version, display_name) VALUES(?, ?, ?)"
-    map_stmt = "INSERT OR IGNORE INTO symbol_ensembl_map(symbol_id, ensembl_gene_id, source) VALUES(?, ?, ?)"
-
-    # The client object uses threads, but also avoid going over rate limits. Since we will likely be IO-bound, I'm not worried about using a single process. But we can submit many requests all at once, then try to start getting the results.
-
-    # Limit rows if n_rows is specified
+    # Step 4: Get list of variables to process
     if n_rows > 0:
-        import itertools
-
         var_iter = itertools.islice(adata.var.iterrows(), n_rows)
         var_list = list(var_iter)
         print(f"Processing first {n_rows} rows for testing")
@@ -598,111 +792,57 @@ def canonicalize(
         var_list = list(adata.var.iterrows())
         print(f"Processing all {len(var_list)} rows")
 
-    # First pass: identify which symbols need API calls
-    symbols_needing_api = []
-    symbol_to_row = {}
-    symbols_with_mappings = 0
+    # Step 5: Prepare symbols and identify which need API calls
+    symbols = prepare_symbols(db, var_list, dataset_info.dataset_id)
 
-    for index, row in var_list:
-        # Check if symbol already exists for this dataset
-        existing_symbol = db.execute(
-            "SELECT symbol_id FROM symbols WHERE name = ? AND dataset_id = ?",
-            (index, dataset_id),
-        ).fetchone()
-
-        if existing_symbol:
-            symbol_id = existing_symbol[0]
-            # Check if this symbol already has Ensembl mappings
-            existing_mappings = db.execute(
-                "SELECT COUNT(*) FROM symbol_ensembl_map WHERE symbol_id = ?",
-                (symbol_id,),
-            ).fetchone()[0]
-
-            if existing_mappings > 0:
-                symbols_with_mappings += 1
-                continue  # Skip API call for this symbol
-        else:
-            # Insert new symbol
-            cursor = db.execute(symbol_stmt, (index, dataset_id, None))
-            symbol_id = cursor.lastrowid
-            db.commit()
-
-        # This symbol needs an API call
-        symbols_needing_api.append((index, row, symbol_id))
-        symbol_to_row[index] = (row, symbol_id)
-
-    if symbols_with_mappings > 0:
-        print(
-            f"Skipping {symbols_with_mappings} symbols that already have Ensembl mappings"
-        )
-
-    if not symbols_needing_api:
+    if not symbols:
         print("All symbols already have Ensembl mappings, nothing to query")
         return
 
-    print(f"Querying Ensembl API for {len(symbols_needing_api)} symbols")
+    print(f"Querying Ensembl API for {len(symbols)} symbols")
 
+    # Step 6: Query API and process results
     with EnsemblQueryPool() as pool:
-        # Submit API requests only for symbols that need them
+        # Submit all API requests
         futures = {}
-        for index, row, symbol_id in symbols_needing_api:
-            future = pool.submit(
-                f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{index}"
-            )
-            futures[future] = (index, row, symbol_id)
+        for symbol in symbols:
+            if symbol.needs_api_call:
+                url = f"https://rest.ensembl.org/xrefs/symbol/homo_sapiens/{symbol.symbol_id}"
+                future = pool.submit(url)
+                futures[future] = symbol
 
-        # Process results as they complete
-        for fut in helpers.progress(
+        # Process results
+        progress_iter = helpers.progress(
             futures.keys(), desc="ensembl", every=100 if len(futures) > 100 else 10
-        ):
-            index, row, symbol_id = futures[fut]
+        )
 
-            err = fut.exception()
+        for future in progress_iter:
+            symbol = futures[future]
+
+            # Check for errors
+            err = future.exception()
             if err is not None:
-                print(f"Failed on {index}: {err}")
+                print(f"Failed on {symbol.symbol_id}: {err}")
                 continue
 
-            result = fut.result()
-            output_dict = {"ensembl": result, "symbol": index}
-            # Only add gene_id if gene_id_col is specified
-            if gene_id_col:
-                output_dict["gene_id"] = row[gene_id_col]
+            # Process successful result
             try:
-                # Process each ensembl result from the API
-                for item in result:
-                    if item.get("type") == "gene":
-                        gene_id = item.get("id", "")
-                        # Split gene_id to get base ID and version if present
-                        if "." in gene_id:
-                            base_id, version = gene_id.rsplit(".", 1)
-                        else:
-                            base_id, version = gene_id, None
+                result = future.result()
+                # Build output dict for logging (optional)
+                output_dict = {"ensembl": result, "symbol": symbol.symbol_id}
+                if gene_id_col and hasattr(symbol.row, "__getitem__"):
+                    output_dict["gene_id"] = symbol.row[gene_id_col]
 
-                        # Insert ensembl gene
-                        cursor = db.execute(
-                            ensembl_stmt,
-                            (base_id, version, item.get("description", "")),
-                        )
-
-                        # Get the ensembl_id (either newly inserted or existing)
-                        ensembl_id = db.execute(
-                            "SELECT ensembl_id FROM ensembl_genes WHERE gene_id = ?",
-                            (base_id,),
-                        ).fetchone()[0]
-
-                        # Create mapping between symbol and ensembl gene
-                        db.execute(map_stmt, (symbol_id, ensembl_id, "ensembl_xrefs"))
-
-                        # Update symbol with included_ensembl_id if this is the first/primary match
-                        db.execute(
-                            "UPDATE symbols SET included_ensembl_id = ? WHERE symbol_id = ? AND included_ensembl_id IS NULL",
-                            (ensembl_id, symbol_id),
-                        )
-
-                db.commit()
+                process_ensembl_result(
+                    db, symbol, result, dataset_info.dataset_id, gene_id_col
+                )
             except sqlite3.Error as err:
-                db.rollback()
-                print(f"Error writing ensembl data for symbol '{index}': {err}")
+                # Only rollback if we're in a transaction
+                try:
+                    db.rollback()
+                except sqlite3.Error:
+                    pass  # Already not in a transaction
+                print(f"Database error for symbol '{symbol.symbol_id}': {err}")
 
 
 def cli():
