@@ -298,7 +298,7 @@ class MultiGroupSource(grain.sources.RandomAccessDataSource):
         self._pert2id: dict[str, int] = {}
 
         for i, cfg in enumerate(cfgs):
-            adata = ad.read_h5ad(cfg.h5ad_fpath, backed="r")
+            adata = ad.read_h5ad(os.path.expandvars(cfg.h5ad_fpath), backed="r")
 
             obs = adata.obs
 
@@ -418,7 +418,7 @@ class LoadAndLift(grain.transforms.Map):
 
     def get_stuff_for_loading(self, cfg: DatasetConfig) -> StuffForLoading:
         if cfg not in self._stuff_for_loading:
-            fpath = str(cfg.h5ad_fpath)
+            fpath = os.path.expandvars(cfg.h5ad_fpath)
 
             # anndata
             adata = ad.read_h5ad(fpath, backed="r")
@@ -467,7 +467,8 @@ class LoadAndLift(grain.transforms.Map):
 @beartype.beartype
 def make_dataloaders(cfg: Config):
     hvgs = harmonize.agg_hvgs([
-        pl.read_csv(dataset.hvgs_csv) for dataset in cfg.datasets + [cfg.vcc_dataset]
+        pl.read_csv(os.path.expandvars(dataset.hvgs_csv))
+        for dataset in cfg.datasets + [cfg.vcc_dataset]
     ])
 
     ops = [
