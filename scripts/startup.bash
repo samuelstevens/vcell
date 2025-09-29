@@ -42,6 +42,7 @@ log "Reading metadata configuration."
 readonly COMMIT=$(get_metadata "git-commit")
 readonly GCS_BUCKET=$(get_metadata "gcs-bucket")
 readonly EXP_PATH=$(get_metadata "exp-path")
+readonly EXP_ARGS=$(get_metadata "exp-args")
 log "Metadata configuration loaded."
 
 # Export Weights & Biases environment variables
@@ -56,11 +57,6 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.local/bin/env
 log "Installed uv."
 
-# Create projects directory if it doesn't exist
-log "Creating projects directory."
-mkdir -p ~/projects
-log "Created projects directory."
-
 log "Cloning vcell repository."
 git clone https://github.com/samuelstevens/vcell.git ~/vcell
 log "Cloned vcell repository."
@@ -71,13 +67,13 @@ git checkout "$COMMIT"
 log "Checked out commit: $COMMIT."
 
 # Download dataset from GCS
-log "Creating data directory."
 export ROOT=~/data
+log "Creating data directory '$ROOT'."
 mkdir -p $ROOT
-log "Created data directory."
+log "Created data directory '$ROOT'."
 
 log "Downloading data from GCS: $GCS_BUCKET"
-gcloud storage cp -r "$GCS_BUCKET" ~/data/
+gcloud storage cp -r "$GCS_BUCKET" $ROOT
 log "Downloaded data from GCS."
 
 # Run experiment
@@ -85,7 +81,7 @@ log "Running experiment: $EXP_PATH"
 
 log "Starting experiment."
 # Use eval to properly expand the arguments as separate parameters
-uv run $EXP_PATH
+uv run $EXP_PATH $EXP_ARGS
 log "Experiment completed."
 
 log "Completed successfully."

@@ -1,3 +1,4 @@
+import os.path
 import pathlib
 
 import anndata as ad
@@ -11,8 +12,10 @@ import polars as pl
 @beartype.beartype
 class VccData:
     def __init__(self, root: pathlib.Path):
-        self.adata = ad.read_h5ad(root / "adata_Training.h5ad", backed="r")
-        self.val = pl.read_csv(root / "pert_counts_Validation.csv")
+        self.adata = ad.read_h5ad(
+            os.path.expandvars(root / "adata_Training.h5ad"), backed="r"
+        )
+        self.val = pl.read_csv(os.path.expandvars(root / "pert_counts_Validation.csv"))
 
     def make_ctrl_pool(self, key: chex.PRNGKey, max_controls: int = 20_000):
         """Create a pool of control cell indices for sampling."""

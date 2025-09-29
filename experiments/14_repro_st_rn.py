@@ -55,7 +55,7 @@ class Config:
     seed: int = 42
     """Random seed."""
 
-    vcc_root: pathlib.Path = pathlib.Path("data/inputs/vcc")
+    vcc_root: pathlib.Path = pathlib.Path("$ROOT")
     """Path to vcc challenge data."""
 
     vcc_dataset: DatasetConfig = DatasetConfig()
