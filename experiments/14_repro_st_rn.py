@@ -629,9 +629,7 @@ def main(
 
     # Train
     global_step = 0
-    run = wandb.init(
-        entity="samuelstevens", project="vcell", config=dataclasses.asdict(cfg)
-    )
+    run = wandb.init(config=dataclasses.asdict(cfg))
     for batch in train_dl:
         key, step_key = jr.split(key)
         model, state, loss, train_metrics = step_model(

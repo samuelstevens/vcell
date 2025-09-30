@@ -73,7 +73,7 @@ mkdir -p $ROOT
 log "Created data directory '$ROOT'."
 
 log "Downloading data from GCS: $GCS_BUCKET"
-gcloud storage cp -r "$GCS_BUCKET" $ROOT
+gcloud storage rsync "$GCS_BUCKET" $ROOT
 log "Downloaded data from GCS."
 
 # Run experiment

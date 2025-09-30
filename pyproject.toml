@@ -28,6 +28,11 @@ dependencies = [
 [project.scripts]
 "ensembl" = "vcell.pp.ensembl:cli"
 
+[project.optional-dependencies]
+tpu = [
+    "jax[tpu]>=0.4.37 ; sys_platform == 'linux'",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
