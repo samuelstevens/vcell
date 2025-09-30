@@ -603,7 +603,7 @@ def main(
     # Print from a single host to avoid duplicated output
     logger.info("global device count: %d", jax.device_count())
     logger.info("local device count: %d", jax.local_device_count())
-    logger.info("pmap result: %d", r)
+    logger.info("pmap result: %s", r)
 
     key = jr.key(seed=cfg.seed)
 
