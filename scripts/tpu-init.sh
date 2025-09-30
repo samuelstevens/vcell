@@ -39,19 +39,19 @@ log "Metadata configuration loaded."
 
 # Clone repo
 readonly CODE_REPO="https://github.com/samuelstevens/vcell.git"
-readonly CODE_DEST="/tmp/vcell"
+readonly CODE_ROOT=~/vcell
 
-log "1. Cloning repo $CODE_REPO into $CODE_DEST..." 
-git clone "$CODE_REPO" "$CODE_DEST"
-cd $CODE_DEST
+log "1. Cloning repo $CODE_REPO into $CODE_ROOT..."
+git clone "$CODE_REPO" "$CODE_ROOT"
+cd $CODE_ROOT
 git checkout "$COMMIT"
-log "Cloned $CODE_REPO into $CODE_DEST successfully." 
+log "Cloned $CODE_REPO into $CODE_ROOT successfully."
 
 # Download dataset from GCS
-readonly DATA_DEST="/tmp/vcc_data"
-mkdir -p "$DATA_DEST"
+export DATA_ROOT=~/data
+mkdir -p "$DATA_ROOT"
 log "2. Downloading dataset from GCS bucket $GCS_BUCKET..." 
-gcloud storage cp "$GCS_BUCKET" "$DATA_DEST"
+gcloud storage cp -r "$GCS_BUCKET" "$DATA_ROOT"
 log "Downloaded dataset from GCS bucket $GCS_BUCKET." 
 
 # Install uv

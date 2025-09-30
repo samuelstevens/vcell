@@ -596,6 +596,15 @@ def main(
 
     pprint.pprint(dataclasses.asdict(cfg))
 
+    # The psum is performed over all mapped devices across the slice
+    xs = jax.numpy.ones(jax.local_device_count())
+    r = jax.pmap(lambda x: jax.lax.psum(x, "i"), axis_name="i")(xs)
+
+    # Print from a single host to avoid duplicated output
+    logger.info("global device count: %d", jax.device_count())
+    logger.info("local device count: %d", jax.local_device_count())
+    logger.info("pmap result: %d", r)
+
     key = jr.key(seed=cfg.seed)
 
     os.makedirs(cfg.ckpt_dir, exist_ok=True)
