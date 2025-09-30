@@ -340,3 +340,74 @@ GPT suggested a couple experiments.
 
 I think I then need to train on VCC + Replogle + Nadig and see what we can do.
 Finally, we can train with the Nourreddine 2025 as well.
+
+# 09/25/2025
+
+The Replogle-Nadig ST model seems to only have ~2.49M parameters.
+Really, the transformer itself has 1.84M parameters, so about 650K, or 25% are embedding/MLP layers.
+I think this is feasible to set up on my laptop.
+With one layer and h=64, there's only 115K transformer parameters.
+
+So I just need to pick out the HVGs for all four Replogle + Nadig datasets, then train a model on it.
+I can use the VCC training data as a validation split.
+
+
+1. Use the four datasets (2x Replogle, 2x Nadig)
+2. Calculate the HVGs across these 4 datasets
+3. Train an ST transformer from scratch with h=128, 4 layers, 8 attention heads, using the exact same setup as in Table 3
+4. Measure zero-shot context generalization by evaluating the model on the VCC training split as a validation set
+5. Using perturbation mean baseline prediction for non-HVGs
+
+
+# 09/29/2025
+
+To avoid setting the --project flag in every gcloud CLI command, use the gcloud config set command to set the project ID in your active configuration:
+
+```sh
+gcloud config set project project-id
+```
+
+This worked:
+
+```sh
+gcloud compute tpus tpu-vm create demo --zone=us-central1-a --accelerator-type=v5litepod-16 --version=v2-alpha-tpuv5-lite --metadata "experiment-script=$SCRIPT,experiment-args=$ARGS,wandb-api-key=$WANDB_KEY,wandb-project=$WANDB_PROJECT,wandb-entity=$WANDB_ENTITY"  --metadata-from-file startup-script=scripts/tpu-init.sh --spot
+```
+Now we do this:
+
+```sh
+gcloud compute tpus tpu-vm create TPUNAME1 --zone us-central1-a --accelerator-type v5litepod-16 --version v2-alpha-tpuv5-lite --spot --metadata git-commit=5d4204d,gcs-bucket=gs://sam-vcc-us-central1/bucket,exp-path=experiments/14_repro_st_rn.py,exp-args='--cfg configs/14-repro-st-rn.toml --vcc-root $ROOT',wandb-api-key=11b55b27cf1dab08762cd33c62e329ed291aa5ae,wandb-project=vcell,wandb-entity=samuelstevens --metadata-from-file startup-script=scripts/tpu-init.sh
+```
+
+Some lessons:
+
+- For some reason, I can only have two TPU VMs at a time. So I need to create one, then delete the old one.
+- I think I want to use rsync instead of cp for gcloud.
+- I need to document all these variables. It's really important. Ideally there would be more structure than just natural language documentation.
+
+# 09/30/2025
+
+1. Can we train on the TPU? Just one slice/pod/etc.
+2. Can we make changes to maciej's script instead of making a new script -> yes!
+3. Set a baseline with 24 hours of training on one TPU.
+
+```sh
+gcloud compute tpus tpu-vm create TPUNAME1 --zone us-central1-a --accelerator-type v5litepod-16 --version v2-alpha-tpuv5-lite --spot --metadata git-commit=6976699,gcs-bucket=gs://sam-vcc-us-central1/bucket,exp-script=experiments/14_repro_st_rn.py,exp-args='--cfg configs/14-repro-st-rn.toml --vcc-root $DATA_ROOT',wandb-api-key=11b55b27cf1dab08762cd33c62e329ed291aa5ae,wandb-project=vcell,wandb-entity=samuelstevens --metadata-from-file startup-script=scripts/tpu-init.sh
+```
+
+Got it working with
+
+```sh
+gcloud compute tpus tpu-vm create TPUNAME1 --zone us-central1-a --accelerator-type v5litepod-16 --version v2-alpha-tpuv5-lite --spot --metadata git-commit=6976699,gcs-bucket=gs://sam-vcc-us-central1/bucket,exp-script=experiments/14_repro_st_rn.py,exp-args='--cfg configs/14-repro-st-rn.toml --vcc-root $DATA_ROOT',wandb-api-key=11b55b27cf1dab08762cd33c62e329ed291aa5ae,wandb-project=vcell,wandb-entity=samuelstevens --metadata-from-file startup-script=scripts/tpu-init.sh
+```
+
+I still need to:
+
+1. Set up the code to use the TPUs. I can't get a single pod, so we need to use the slice. We can use data parallelism. Need to include which worker is logging, only log wandb on master, etc.
+2. Set up a baseline with 24 hours on a v5e 16 TPU slice.
+
+Resources for multi-TPU:
+
+- https://cloud.google.com/tpu/docs/jax-pods
+- https://docs.jax.dev/en/latest/multi_process.html
+- https://docs.jax.dev/en/latest/the-training-cookbook.html
+- https://docs.jax.dev/en/latest/notebooks/Distributed_arrays_and_automatic_parallelization.html

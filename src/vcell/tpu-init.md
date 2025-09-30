@@ -20,9 +20,9 @@ gcloud storage cp -r $FILES gs://sam-vcc-us-central1
 | `gcs-bucket` | `gs://sam-vcc-us-central1/bucket` | Full GCS path to your data bucket |
 | `exp-script` | `experiments/14_repro_st_rn.py` | Path to Python experiment script (relative to repo root) |
 | `exp-args` | `'--cfg configs/14-repro-st-rn.toml --vcc-root $DATA_ROOT'` | Arguments passed to the experiment script |
-| `wandb-api-key` | `11b55b27...` | WandB API key for experiment tracking (currently unused) |
-| `wandb-project` | `vcell` | WandB project name (currently unused) |
-| `wandb-entity` | `samuelstevens` | WandB entity/username (currently unused) |
+| `wandb-api-key` | `11b55b27...` | WandB API key for experiment tracking |
+| `wandb-project` | `vcell` | WandB project name |
+| `wandb-entity` | `samuelstevens` | WandB entity/username |
 
 ### Runtime Variables (automatically set by scripts/tpu-init.sh)
 
@@ -49,29 +49,6 @@ gcloud storage cp -r $FILES gs://sam-vcc-us-central1
    - Runs: `uv run --extra tpu "$exp-script" $exp-args`
 3. **Experiment script** loads config file and runs training
 4. **Config file** (e.g., `configs/14-repro-st-rn.toml`) uses `$DATA_ROOT` for data paths
-
-## Quick Start Example
-
-```sh
-# Set your values
-NAME=my-experiment-v1
-ZONE=us-central1-a
-ACCELERATOR=v5litepod-16
-VERSION=v2-alpha-tpuv5-lite
-COMMIT=6976699
-BUCKET=gs://sam-vcc-us-central1/bucket
-SCRIPT=experiments/14_repro_st_rn.py
-ARGS='--cfg configs/14-repro-st-rn.toml --vcc-root $DATA_ROOT'
-
-# Create spot TPU VM
-gcloud compute tpus tpu-vm create $NAME \
-  --zone $ZONE \
-  --accelerator-type $ACCELERATOR \
-  --version $VERSION \
-  --spot \
-  --metadata git-commit=$COMMIT,gcs-bucket=$BUCKET,exp-script=$SCRIPT,exp-args="$ARGS",wandb-api-key=$WANDB_API_KEY,wandb-project=vcell,wandb-entity=$WANDB_ENTITY \
-  --metadata-from-file startup-script=scripts/tpu-init.sh
-```
 
 ## Config File Setup
 

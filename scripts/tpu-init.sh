@@ -35,7 +35,15 @@ EXP_SCRIPT=$(get_metadata "exp-script")
 readonly EXP_SCRIPT
 EXP_ARGS=$(get_metadata "exp-args")
 readonly EXP_ARGS
+
+WANDB_API_KEY=$(get_metadata "wandb-api-key")
+export WANDB_API_KEY
+WANDB_PROJECT=$(get_metadata "wandb-project")
+export WANDB_PROJECT
+WANDB_ENTITY=$(get_metadata "wandb-entity")
+export WANDB_ENTITY
 log "Metadata configuration loaded."
+
 
 # Clone repo
 readonly CODE_REPO="https://github.com/samuelstevens/vcell.git"
@@ -50,9 +58,9 @@ log "Cloned $CODE_REPO into $CODE_ROOT successfully."
 # Download dataset from GCS
 export DATA_ROOT=~/data
 mkdir -p "$DATA_ROOT"
-log "2. Downloading dataset from GCS bucket $GCS_BUCKET..." 
-gcloud storage cp -r "$GCS_BUCKET" "$DATA_ROOT"
-log "Downloaded dataset from GCS bucket $GCS_BUCKET." 
+log "2. Downloading dataset from GCS bucket '$GCS_BUCKET' to '$DATA_ROOT'"
+gcloud storage rsync "$GCS_BUCKET" "$DATA_ROOT"
+log "Downloaded dataset from GCS bucket $GCS_BUCKET."
 
 # Install uv
 log "3. Installing uv..." 
@@ -60,8 +68,9 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.local/bin/env
 log "Installed uv" 
 
-log "4. Running $EXP_SCRIPT with arguments: $EXP_ARGS." 
+env
 
+log "4. Running $EXP_SCRIPT with arguments: $EXP_ARGS."
 # Run the experiment
 uv run --extra tpu "$EXP_SCRIPT" $EXP_ARGS
 
