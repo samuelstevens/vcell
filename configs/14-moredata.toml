@@ -1,0 +1,169 @@
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_essential.h5ad"
+hvgs_fpath = 
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "var-index"
+gene_name_col = "gene_name"
+is_multiplet = "False"
+multiplet_n_col = "None"
+group_by = ["gem_group"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_gwps.h5ad"
+hvgs_fpath = 
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "var-index"
+gene_name_col = "gene_name"
+is_multiplet = "False"
+multiplet_n_col = "None"
+group_by = ["gem_group"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_hepg2.h5ad"
+hvgs_fpath = 
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "var-index"
+gene_name_col = "gene_name"
+is_multiplet = "False"
+multiplet_n_col = "None"
+group_by = ["gem_group"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_jurkat.h5ad"
+hvgs_fpath = 
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "var-index"
+gene_name_col = "gene_name"
+is_multiplet = "False"
+multiplet_n_col = "None"
+group_by = ["gem_group"]
+
+[[datasets]]
+h5ad_fpath = "data/inputs/vcc/adata_Training.h5ad"
+hvgs_fpath = "data/cached/vcc/adata_Training.json"
+pert_col = "target_gene"
+ctrl_label = "non-targeting"
+gene_id_col = "gene_id"
+gene_name_col = "var-index"
+is_multiplet = "False"
+multiplet_n_col = "None"
+group_by = ["batch"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/GasperiniShendure2019_atscale.h5ad"
+hvgs_fpath = 
+pert_col = "perturbation"
+ctrl_label = "nan" 
+gene_id_col = "gene_id"
+gene_name_col = "var-index"
+is_multiplet = "True"
+multiplet_n_col = "guide_count"
+group_by = ["sample"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/GasperiniShendure2019_highMOI.h5ad"
+hvgs_fpath = 
+pert_col = "perturbation"
+ctrl_label = "nan" 
+gene_id_col = "gene_id"
+gene_name_col = "var-index"
+is_multiplet = "True"
+multiplet_n_col = "guide_count"
+group_by = ["sample"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/GasperiniShendure2019_lowMOI.h5ad"
+hvgs_fpath = 
+pert_col = "perturbation"
+ctrl_label = "nan" 
+gene_id_col = "gene_id"
+gene_name_col = "var-index"
+is_multiplet = "True"
+multiplet_n_col = "guide_count"
+group_by = ["sample"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/nourreddine2025_KOFL_Pan_Genome_Aggreggate.h5ad"
+hvgs_fpath = 
+pert_col = "feature_call"
+ctrl_label = "Non-Targeting" 
+gene_id_col = "gene_ids"
+gene_name_col = "var-index"
+is_multiplet = "True"
+multiplet_n_col = "num_features"
+group_by = ["cell_barcode"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/xaira_therapeutics2025_HCT116_filtered_dual_guide_cells.h5ad"
+hvgs_fpath = 
+pert_col = "gene_target"
+ctrl_label = "Non-Targeting" 
+gene_id_col = "None"
+gene_name_col = "_index"
+is_multiplet = "False"
+multiplet_n_col = "None"
+group_by = ["sample_categories"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/xaira_therapeutics2025_HEK293T_filtered_dual_guide_cells.h5ad"
+hvgs_fpath = 
+pert_col = "gene_target"
+ctrl_label = "Non-Targeting" 
+gene_id_col = "None"
+gene_name_col = "_index"
+is_multiplet = "False"
+multiplet_n_col = "None"
+group_by = ["sample_categories"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/yao2023_GSM6858449_KD_conventional.h5ad"
+hvgs_fpath = 
+pert_col = "Guides_collapsed_by_gene"
+ctrl_label = "non-targeting" 
+gene_id_col = "None"
+gene_name_col = "_index"
+is_multiplet = "True"
+multiplet_n_col = "Total_number_of_guides"
+group_by = ["Biological_replicate"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/yao2023_GSM6858447_KO_conventional.h5ad"
+hvgs_fpath = 
+pert_col = "Guides_collapsed_by_gene"
+ctrl_label = "non-targeting" 
+gene_id_col = "None"
+gene_name_col = "_index"
+is_multiplet = "True"
+multiplet_n_col = "Total_number_of_guides"
+group_by = ["Biological_replicate"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/yao2023_GSM6858448_KO_cell_pooled.h5ad"
+hvgs_fpath = 
+pert_col = "Guides_collapsed_by_gene"
+ctrl_label = "non-targeting" 
+gene_id_col = "None"
+gene_name_col = "_index"
+is_multiplet = "True"
+multiplet_n_col = "Total_number_of_guides"
+group_by = ["Biological_replicate"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/yao2023_GSM6858450_KD_guide_pooled.h5ad"
+hvgs_fpath = 
+pert_col = "Guides_collapsed_by_gene"
+ctrl_label = "non-targeting" 
+gene_id_col = "None"
+gene_name_col = "_index"
+is_multiplet = "True"
+multiplet_n_col = "Total_number_of_guides"
+group_by = ["Biological_replicate"]
+
+
+
+
+
