@@ -36,7 +36,7 @@ from vcell import helpers
 @dataclasses.dataclass(frozen=True)
 class Config:
     # Logging
-    wandb_key: str
+    wandb_key: str = ""
     """Your W&B API key"""
     wandb_entity: str = "samuelstevens"
     """W&B entity (username or team)"""
@@ -78,10 +78,6 @@ def main(
 
     pprint.pprint(dataclasses.asdict(cfg))
 
-    key = jr.key(seed=cfg.seed)
-
-    os.makedirs(cfg.ckpt_dir, exist_ok=True)
-
     # Train
     wandb.login(key=cfg.wandb_key)
     run = wandb.init(
@@ -94,7 +90,6 @@ def main(
             "accuracy": step / 10,
         }, step=step)
         time.sleep(0.5)
-
 
 if __name__ == "__main__":
     tyro.cli(main)
