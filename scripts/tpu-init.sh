@@ -52,11 +52,9 @@ sudo pip install uv
 echo "Installed uv" | tee -a /tmp/startup.log
 
 # Configure Weights & Biases
-echo "6. Configuring wandb..." | tee -a /tmp/startup.log
-WANDB_API_KEY=$(get_metadata wandb-api-key)
-WANDB_PROJECT=$(get_metadata wandb-project)
-WANDB_ENTITY=$(get_metadata wandb-entity)
-echo "Configured wandb with project: $WANDB_PROJECT and entity: $WANDB_ENTITY." | tee -a /tmp/startup.log
+echo "6. Installing wandb..." | tee -a /tmp/startup.log
+sudo pip install wandb
+echo "Installed wandb" | tee -a /tmp/startup.log
 
 # Get the experiment script from metadata
 EXP_SCRIPT=$(get_metadata experiment-script)

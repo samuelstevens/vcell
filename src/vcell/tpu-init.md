@@ -17,13 +17,12 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 5. Create a spot tpu and pass these new fields:
 * `$SCRIPT` is the name of a file under /experiments. Ex: "05_training.py"
-* `$ARGS` will be passed directly into $SCRIPT. Ex: "--vcc /tmp/vcc_data/ --data.h5ad-fpath /tmp/vcc_data/adata_Training.h5ad"
-* `$WANDB_*` DON'T CURRENTLY DO ANYTING - SEE MACIEJ. Just put anything in there for now.
+* `$ARGS` will be passed directly into $SCRIPT. Ex: "--vcc /tmp/vcc_data/ --data.h5ad-fpath /tmp/vcc_data/adata_Training.h5ad --wandb-key xxxxxx"
 
 ```sh
 gcloud compute tpus tpu-vm create $NAME --zone=$ZONE \
 --accelerator-type=$TYPE --version=e$VERSION \
---metadata "experiment-script=$SCRIPT,experiment-args=$ARGS,wandb-api-key=$WANDB_KEY,wandb-project=$WANDB_PROJECT",wandb-entity=$WANDB_ENTITY" \ 
+--metadata "experiment-script=$SCRIPT,experiment-args=$ARGS" \ 
 --metadata-from-file startup-script=tpu-init.sh --spot
 ```
 

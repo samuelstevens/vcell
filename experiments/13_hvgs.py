@@ -73,6 +73,12 @@ class Config:
     n_workers: int = 8
 
     # Logging
+    wandb_key: str = ""
+    """Your W&B API key"""
+    wandb_entity: str = "samuelstevens"
+    """W&B entity (username or team)"""
+    wandb_project: str = "vcell"
+    """W&B project name"""
     log_every: int = 20
     """how often to log metrics."""
     ckpt_dir: str = os.path.join(".", "checkpoints")
@@ -540,8 +546,9 @@ def main(
 
     # Train
     global_step = 0
+    wandb.login(key=cfg.wandb_key)
     run = wandb.init(
-        entity="samuelstevens", project="vcell", config=dataclasses.asdict(cfg)
+        entity=cfg.wandb_entity, project=cfg.wandb_project, config=dataclasses.asdict(cfg)
     )
     for batch in dataloader:
         key, step_key = jr.split(key)
