@@ -1,67 +1,77 @@
 #!/bin/bash
 
+set -euo pipefail  # Exit on error, undefined vars, pipe failures
+
+# Configuration
+readonly LOG_FILE="/tmp/startup.log"
+
+# Start logging - append to log file and show on terminal
+exec > >(tee -a "$LOG_FILE")
+exec 2>&1
+
+# Helper to log with timestamp
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
 # Helper to read metadata
 get_metadata() {
-  curl -s -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1"
+  curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1"
 }
 
-echo "***TPU VM $(hostname) starting at $(date -Is)***" | tee /tmp/startup.log
+log "***TPU VM $(hostname) starting.***"
+
+# Error handling
+trap 'log "Error on line $LINENO" >&2' ERR
+trap 'log "Script interrupted" >&2; exit 130' INT TERM
+
+# Get all required metadata upfront
+log "Reading metadata configuration."
+COMMIT=$(get_metadata "git-commit")
+readonly COMMIT
+GCS_BUCKET=$(get_metadata "gcs-bucket")
+readonly GCS_BUCKET
+EXP_SCRIPT=$(get_metadata "exp-script")
+readonly EXP_SCRIPT
+EXP_ARGS=$(get_metadata "exp-args")
+readonly EXP_ARGS
+
+WANDB_API_KEY=$(get_metadata "wandb-api-key")
+export WANDB_API_KEY
+WANDB_PROJECT=$(get_metadata "wandb-project")
+export WANDB_PROJECT
+WANDB_ENTITY=$(get_metadata "wandb-entity")
+export WANDB_ENTITY
+log "Metadata configuration loaded."
+
 
 # Clone repo
-REPO="https://github.com/samuelstevens/vcell.git"
-DEST="/tmp/vcell"
-echo "1. Cloning repo $REPO into $DEST..." | tee -a /tmp/startup.log
-sudo git clone "$REPO" "$DEST" 2>&1 | tee -a /tmp/startup.log || {
-  echo "ERROR: git clone failed!" | tee -a /tmp/startup.log
-  exit 1
-}
-echo "Cloned $REPO into $DEST successfully." | tee -a /tmp/startup.log
+readonly CODE_REPO="https://github.com/samuelstevens/vcell.git"
+readonly CODE_ROOT=~/vcell
+
+log "1. Cloning repo $CODE_REPO into $CODE_ROOT..."
+git clone "$CODE_REPO" "$CODE_ROOT"
+cd $CODE_ROOT
+git checkout "$COMMIT"
+log "Cloned $CODE_REPO into $CODE_ROOT successfully."
 
 # Download dataset from GCS
-DATA_DEST="/tmp/vcc_data"
-mkdir -p "$DATA_DEST"
-echo "2. Downloading dataset from GCS bucket vcell-bucket..." | tee -a /tmp/startup.log
-gsutil cp gs://vcell-bucket/vcc_data.zip "$DATA_DEST/" || {
-  echo "ERROR: gsutil download failed!" | tee -a /tmp/startup.log
-  exit 1
-}
-echo "Downloaded dataset from GCS bucket vcell-bucket." | tee -a /tmp/startup.log
-
-# Unzip and flatten dataset
-echo "3. Unzipping dataset..." | tee -a /tmp/startup.log
-unzip "$DATA_DEST/vcc_data.zip" -d "$DATA_DEST" || {
-  echo "ERROR: unzip failed!" | tee -a /tmp/startup.log
-  exit 1
-}
-
-if [[ -d "$DATA_DEST/vcc_data" ]]; then
-    echo "4. Flattening nested vcc_data folder..." | tee -a /tmp/startup.log
-    mv "$DATA_DEST/vcc_data/"* "$DATA_DEST/"
-    rm -rf "$DATA_DEST/vcc_data"
-fi
-echo "Dataset ready in $DATA_DEST." | tee -a /tmp/startup.log
-
-# Change to the cloned repo directory
-cd /tmp/vcell
+export DATA_ROOT=~/data
+mkdir -p "$DATA_ROOT"
+log "2. Downloading dataset from GCS bucket '$GCS_BUCKET' to '$DATA_ROOT'"
+gcloud storage rsync "$GCS_BUCKET" "$DATA_ROOT"
+log "Downloaded dataset from GCS bucket $GCS_BUCKET."
 
 # Install uv
-echo "5. Installing uv..." | tee -a /tmp/startup.log
-sudo pip install --upgrade pip
-sudo pip install uv
-echo "Installed uv" | tee -a /tmp/startup.log
+log "3. Installing uv..." 
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.local/bin/env
+log "Installed uv" 
 
-# Configure Weights & Biases
-echo "6. Installing wandb..." | tee -a /tmp/startup.log
-sudo pip install wandb
-echo "Installed wandb" | tee -a /tmp/startup.log
+env
 
-# Get the experiment script from metadata
-EXP_SCRIPT=$(get_metadata experiment-script)
-ARGS=$(get_metadata experiment-args)
-echo "7. Running experiments/$EXP_SCRIPT with arguments: $ARGS. See experiment log for details..." | tee -a /tmp/startup.log
-
+log "4. Running $EXP_SCRIPT with arguments: $EXP_ARGS."
 # Run the experiment
-sudo uv run "experiments/$EXP_SCRIPT" $ARGS 2>&1 | tee -a /tmp/experiment.log
+uv run --extra tpu "$EXP_SCRIPT" $EXP_ARGS
 
-echo "***Startup script completed at $(date -Is)***" | tee -a /tmp/startup.log
+log "***Startup script completed at $(date -Is)***" 
