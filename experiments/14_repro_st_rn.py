@@ -14,22 +14,22 @@ import typing as tp
 
 import anndata as ad
 import beartype
-import chex
 import equinox as eqx
 import grain
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import jax.sharding as jshard
 import numpy as np
 import optax
 import pandas as pd
 import polars as pl
 import tyro
-from jaxtyping import Array, Float, Int, jaxtyped
+from jaxtyping import Array, Float, Int, Key, Shaped, jaxtyped
 
 import vcell.nn.optim
 import wandb
-from vcell import helpers, metrics
+from vcell import helpers
 from vcell.data import harmonize, vcc
 
 log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
@@ -40,14 +40,13 @@ logger = logging.getLogger("14")
 @beartype.beartype
 @dataclasses.dataclass(frozen=True)
 class DatasetConfig:
-    h5ad_fpath: pathlib.Path
+    h5ad_fpath: pathlib.Path = pathlib.Path("data/adata.h5ad")
     """Path to h5ad file."""
-    hvgs_csv: pathlib.Path
+    hvgs_csv: pathlib.Path = pathlib.Path("data/adata.csv")
     """Path the hvgs.csv file."""
     pert_col: str = "target_gene"
     ctrl_label: str = "non-targeting"
     group_by: tuple[str, ...] = ("batch",)
-    gene_id_col: str = "ensembl_id"
 
 
 @beartype.beartype
@@ -56,8 +55,10 @@ class Config:
     seed: int = 42
     """Random seed."""
 
-    vcc: pathlib.Path = pathlib.Path("data/inputs/vcc")
+    vcc_root: pathlib.Path = pathlib.Path("$DATA_ROOT")
     """Path to vcc challenge data."""
+
+    vcc_dataset: DatasetConfig = DatasetConfig()
 
     datasets: list[DatasetConfig] = dataclasses.field(default_factory=list)
 
@@ -76,6 +77,11 @@ class Config:
     n_hvgs: int = 2_000
 
     n_workers: int = 8
+
+    val_every: int = 100_000
+
+    device: tp.Literal["cpu", None] = None
+    n_devices: int = -1
 
     # Logging
     log_every: int = 20
@@ -100,7 +106,7 @@ class Mlp(eqx.Module):
         *,
         dropout_p: float = 0.0,
         ln_eps: float = 1e-5,
-        key: chex.PRNGKey,
+        key: Key[Array, ""],
     ):
         self.linears = []
         self.norms = []
@@ -118,7 +124,7 @@ class Mlp(eqx.Module):
         self.act = jax.nn.gelu
 
     def __call__(
-        self, x: Float[Array, " d_in"], *, key: chex.PRNGKey
+        self, x: Float[Array, " d_in"], *, key: Key[Array, ""]
     ) -> Float[Array, " d_out"]:
         keys = jr.split(key, len(self.linears))
 
@@ -141,7 +147,7 @@ class Block(eqx.Module):
     ln2: eqx.nn.LayerNorm
     mlp: eqx.nn.MLP
 
-    def __init__(self, d: int, n_heads: int, ratio: float | int, key: chex.PRNGKey):
+    def __init__(self, d: int, n_heads: int, ratio: float | int, key: Key[Array, ""]):
         k1, k2, k3, k4 = jr.split(key, 4)
         self.attn = eqx.nn.MultiheadAttention(
             num_heads=n_heads,
@@ -162,7 +168,7 @@ class Block(eqx.Module):
             key=k2,
         )
 
-    def __call__(self, x_sh: Float[Array, "set h"], *, key: chex.PRNGKey):
+    def __call__(self, x_sh: Float[Array, "set h"], *, key: Key[Array, ""]):
         set_size, h = x_sh.shape
         key, *keys = jax.random.split(key, set_size + 1)
 
@@ -190,7 +196,7 @@ class Transformer(eqx.Module):
         n_layers: int,
         n_heads: int,
         mlp_mult: float | int,
-        key: chex.PRNGKey,
+        key: Key[Array, ""],
     ):
         k1, k2, k3, k4, k5 = jr.split(key, 5)
 
@@ -212,7 +218,7 @@ class Transformer(eqx.Module):
         x_sg: Float[Array, "set n_genes"],
         pert_id: Int[Array, ""],
         *,
-        key: chex.PRNGKey,
+        key: Key[Array, ""],
     ):
         set_size, n_genes = x_sg.shape
         key, *f_cell_keys = jr.split(key, set_size + 1)
@@ -229,58 +235,46 @@ class Transformer(eqx.Module):
         return x_sg + delta_sg
 
 
+@eqx.filter_jit()
 @jaxtyped(typechecker=beartype.beartype)
 def loss_and_aux(
     model: eqx.Module,
-    ctrls_bsg: Float[Array, "batch set n_genes"],
-    perts_b: Int[Array, " batch"],
-    tgts_bsg: Float[Array, "batch set n_genes"],
-    key: chex.PRNGKey,
+    batch: dict[str, Shaped[Array, "bsz ..."]],
+    keys: Key[Array, " bsz"],
 ) -> tuple[Float[Array, ""], dict]:
-    keys_b = jr.split(key, len(perts_b))
-    preds_bsg = jax.vmap(model)(ctrls_bsg, perts_b, key=keys_b)
-    mu_ctrls_bg = ctrls_bsg.mean(axis=1)
+    preds_bsg = jax.vmap(model)(batch["control"], batch["pert_id"], key=keys)
     mu_preds_bg = preds_bsg.mean(axis=1)
-    mu_tgts_bg = tgts_bsg.mean(axis=1)
+    mu_tgts_bg = batch["target"].mean(axis=1)
 
     mu_mse = jnp.mean((mu_preds_bg - mu_tgts_bg) ** 2)
 
-    effect_pds = metrics.compute_pds(
-        mu_preds_bg - mu_ctrls_bg, mu_tgts_bg - mu_ctrls_bg
-    )
-    pds = metrics.compute_pds(mu_preds_bg, mu_tgts_bg)
     l1 = jnp.mean(jnp.abs(mu_preds_bg - mu_tgts_bg))
 
-    aux = {
-        "mu-mse": mu_mse,
-        **{f"pds/{k}": v for k, v in pds.items()},
-        **{f"effect-pds/{k}": v for k, v in effect_pds.items()},
-        "l1": l1,
-    }
+    aux = {"mu-mse": mu_mse, "l1": l1}
     return mu_mse, aux
 
 
-@jaxtyped(typechecker=beartype.beartype)
 @eqx.filter_jit(donate="all")
+@jaxtyped(typechecker=beartype.beartype)
 def step_model(
     model: eqx.Module,
     optim: optax.GradientTransformation,
     state: tp.Any,
-    ctrls_bsg: Float[Array, "batch set n_genes"],
-    perts_b: Int[Array, " batch"],
-    tgts_bsg: Float[Array, "batch set n_genes"],
-    key: chex.PRNGKey,
-) -> tuple[eqx.Module, tp.Any, Float[Array, ""], dict]:
-    (loss, metrics), grads = eqx.filter_value_and_grad(loss_and_aux, has_aux=True)(
-        model, ctrls_bsg, perts_b, tgts_bsg, key
-    )
+    batch: dict[str, Shaped[Array, "bsz ..."]],
+    keys: Key[Array, " bsz"],
+) -> tuple[eqx.Module, tp.Any, Float[Array, ""], dict[str, object]]:
+    # Check that model/optimizer state are replicated across batch dimension.
+    model, opt_state = eqx.filter_shard((model, state), jax.P())
+    # Check that batch is split up across batch dimension
+    batch, keys = eqx.filter_shard((batch, keys), jax.P("data"))
 
+    loss_fn = eqx.filter_value_and_grad(loss_and_aux, has_aux=True)
+    (loss, metrics), grads = loss_fn(model, batch, keys)
     updates, new_state = optim.update(grads, state, model)
+    model = eqx.apply_updates(model, updates)
 
     metrics["optim/grad-norm"] = optax.global_norm(grads)
     metrics["optim/update-norm"] = optax.global_norm(updates)
-
-    model = eqx.apply_updates(model, updates)
 
     return model, new_state, loss, metrics
 
@@ -303,7 +297,7 @@ class MultiGroupSource(grain.sources.RandomAccessDataSource):
         self._pert2id: dict[str, int] = {}
 
         for i, cfg in enumerate(cfgs):
-            adata = ad.read_h5ad(cfg.h5ad_fpath, backed="r")
+            adata = ad.read_h5ad(os.path.expandvars(cfg.h5ad_fpath), backed="r")
 
             obs = adata.obs
 
@@ -400,8 +394,7 @@ class StuffForLoading(tp.NamedTuple):
 
 @beartype.beartype
 class LoadAndLift(grain.transforms.Map):
-    def __init__(self, vcc_h5ad: str | pathlib.Path, hvgs: list[str]):
-        self._vcc_h5ad = str(vcc_h5ad)
+    def __init__(self, hvgs: list[str]):
         self._hvgs = hvgs
         self._stuff_for_loading: dict[DatasetConfig, StuffForLoading] = {}
 
@@ -424,7 +417,7 @@ class LoadAndLift(grain.transforms.Map):
 
     def get_stuff_for_loading(self, cfg: DatasetConfig) -> StuffForLoading:
         if cfg not in self._stuff_for_loading:
-            fpath = str(cfg.h5ad_fpath)
+            fpath = os.path.expandvars(cfg.h5ad_fpath)
 
             # anndata
             adata = ad.read_h5ad(fpath, backed="r")
@@ -471,30 +464,34 @@ class LoadAndLift(grain.transforms.Map):
 
 
 @beartype.beartype
-def make_dataloader(cfg: Config):
+def make_dataloaders(cfg: Config):
     hvgs = harmonize.agg_hvgs([
-        pl.read_csv(dataset.hvgs_csv) for dataset in cfg.datasets
+        pl.read_csv(os.path.expandvars(dataset.hvgs_csv))
+        for dataset in cfg.datasets + [cfg.vcc_dataset]
     ])
 
     ops = [
         SampleSet(set_size=cfg.set_size),
-        LoadAndLift(cfg.vcc / "adata_Training.h5ad", hvgs),
+        LoadAndLift(hvgs),
         grain.transforms.Batch(batch_size=cfg.batch_size),
     ]
     helpers.check_grain_ops(ops)
 
-    source = MultiGroupSource(cfg.datasets, set_size=cfg.set_size)
+    train_source = MultiGroupSource(cfg.datasets, set_size=cfg.set_size)
+    val_source = MultiGroupSource([cfg.vcc_dataset], set_size=cfg.set_size)
+
+    index, count = jax.process_index(), jax.process_count()
 
     sampler = grain.samplers.IndexSampler(
-        num_records=len(source),
+        num_records=len(train_source),
         seed=cfg.seed,
         shuffle=True,
         num_epochs=None,  # stream forever
-        shard_options=grain.sharding.ShardOptions(shard_index=0, shard_count=1),
+        shard_options=grain.sharding.ShardOptions(shard_index=index, shard_count=count),
     )
 
-    dl = grain.DataLoader(
-        data_source=source,
+    train_dl = grain.DataLoader(
+        data_source=train_source,
         sampler=sampler,
         operations=ops,
         worker_count=cfg.n_workers,
@@ -502,7 +499,67 @@ def make_dataloader(cfg: Config):
         read_options=grain.ReadOptions(num_threads=8, prefetch_buffer_size=500),
     )
 
-    return dl
+    val_sampler = grain.samplers.IndexSampler(
+        num_records=len(val_source),
+        seed=cfg.seed,
+        shuffle=True,
+        num_epochs=1,  # One pass
+        shard_options=grain.sharding.ShardOptions(shard_index=index, shard_count=count),
+    )
+    val_dl = grain.DataLoader(
+        data_source=val_source,
+        sampler=val_sampler,
+        operations=ops,
+        worker_count=cfg.n_workers,
+        worker_buffer_size=2,
+        read_options=grain.ReadOptions(num_threads=8, prefetch_buffer_size=500),
+    )
+
+    return train_dl, val_dl
+
+
+def is_device_array(x: object) -> bool:
+    if not isinstance(x, (jax.Array, np.ndarray)):
+        return False
+
+    dt = getattr(x, "dtype", None)
+    if dt is None:
+        return False
+    return (
+        np.issubdtype(dt, np.bool_)
+        or np.issubdtype(dt, np.integer)
+        or np.issubdtype(dt, np.unsignedinteger)
+        or np.issubdtype(dt, np.floating)
+        or np.issubdtype(dt, np.complexfloating)
+    )
+
+
+def to_device(batch: dict[str, object], device=None) -> tuple[dict, dict]:
+    numeric = {k: v for k, v in batch.items() if is_device_array(v)}
+    aux = {k: v for k, v in batch.items() if not is_device_array(v)}
+    # device_put works on pytrees; leaves become jax.Arrays on the target device
+    numeric = jax.device_put(numeric, device)
+    return numeric, aux
+
+
+@jaxtyped(typechecker=beartype.beartype)
+def validate(model: eqx.Module, dl, key: Key[Array, ""]) -> dict[str, object]:
+    metrics = []
+    for i, batch in enumerate(helpers.progress(dl, desc="val")):
+        batch, metadata = to_device(batch)
+        loss, aux = loss_and_aux(model, batch, jr.fold_in(key, i))
+        metrics.append(aux)
+
+    metrics = {
+        k: jnp.concatenate([dct[k].reshape(-1) for dct in metrics if k in dct])
+        for k in metrics[0]
+    }
+
+    means = {f"val/{k}": v.mean() for k, v in metrics.items()}
+    maxes = {f"val/max_{k}": v.max() for k, v in metrics.items()}
+    mins = {f"val/min_{k}": jnp.min(v) for k, v in metrics.items()}
+
+    return {**means, **maxes, **mins}
 
 
 @beartype.beartype
@@ -540,12 +597,27 @@ def main(
 
     pprint.pprint(dataclasses.asdict(cfg))
 
+    if cfg.device == "cpu" and cfg.n_devices > 0:
+        jax.config.update("jax_platform_name", "cpu")
+        jax.config.update("jax_num_cpu_devices", cfg.n_devices)
+
+    # Only do data parallelism
+    n_devices = jax.device_count()
+    mesh = jax.make_mesh((n_devices,), ("data",))
+    jshard.set_mesh(mesh)
+
+    # Describe the device arrangement.
+    logger.info("global device count: %d", jax.device_count())
+    logger.info("local device count: %d", jax.local_device_count())
+
+    assert cfg.batch_size % n_devices == 0
+
     key = jr.key(seed=cfg.seed)
 
     os.makedirs(cfg.ckpt_dir, exist_ok=True)
 
     # Load training data (backed) and validation counts
-    vcc_data = vcc.VccData(cfg.vcc)
+    vcc_data = vcc.VccData(cfg.vcc_root)
 
     # Init tiny model (OOV=0 row set to 0)
     key, model_key = jr.split(key)
@@ -564,33 +636,33 @@ def main(
     logger.info("Initialized model with %d params.", n_params)
 
     optim = vcell.nn.optim.make(cfg.optim)
-
     state = optim.init(eqx.filter(model, eqx.is_inexact_array))
     logger.info("Initialized optimizer.")
 
-    dataloader = make_dataloader(cfg)
-    logger.info("Initialized dataloader.")
+    train_dl, val_dl = make_dataloaders(cfg)
+    logger.info("Initialized dataloaders.")
+
+    # Replicate across batch dimension.
+    model, state = eqx.filter_shard((model, state), jax.P())
 
     # Train
     global_step = 0
-    run = wandb.init(
-        entity="samuelstevens", project="vcell", config=dataclasses.asdict(cfg)
-    )
-    for batch in dataloader:
-        key, step_key = jr.split(key)
-        model, state, loss, metrics = step_model(
-            model,
-            optim,
-            state,
-            jnp.array(batch["control"]),
-            jnp.array(batch["pert_id"]),
-            jnp.array(batch["target"]),
-            step_key,
-        )
+    run = wandb.init(config=dataclasses.asdict(cfg))
+    for batch in train_dl:
+        key, *keys = jr.split(key, cfg.batch_size + 1)
+        keys = jnp.array(keys)
+        model, state, loss, train_metrics = step_model(model, optim, state, batch, keys)
         global_step += 1
 
+        val_metrics = {}
+        if global_step % cfg.val_every == 0:
+            key, val_key = jr.split(key)
+            val_metrics = validate(model, val_dl, val_key)
+
         if global_step % cfg.log_every == 0:
-            metrics = {k: v.item() for k, v in metrics.items()}
+            metrics = {}
+            metrics.update({k: v.item() for k, v in train_metrics.items()})
+            metrics.update({k: v.item() for k, v in val_metrics.items()})
             logger.info("step: %d, loss: %.5f %s", global_step, loss.item(), metrics)
             run.log(
                 {"step": global_step, "train/loss": loss.item(), **metrics},
