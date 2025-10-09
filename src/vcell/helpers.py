@@ -12,6 +12,8 @@ import warnings
 
 import beartype
 
+T = tp.TypeVar("T")
+
 
 @beartype.beartype
 class progress:
@@ -132,7 +134,7 @@ def current_git_commit() -> str | None:
 
 
 @beartype.beartype
-def dict_to_dataclass(data: dict, cls: type) -> tp.Any:
+def dict_to_dataclass(data: dict, cls: type[T]) -> T:
     """Recursively convert a dictionary to a dataclass instance."""
     if not dataclasses.is_dataclass(cls):
         return data
