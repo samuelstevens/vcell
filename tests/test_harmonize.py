@@ -531,3 +531,26 @@ def test_agg_hvgs_tied_variances():
     result = agg_hvgs([df], n_top=2)
     assert set(result[:2]) == {"GENE_A", "GENE_B"}
     assert len(result) == 2
+
+
+def test_highly_variable_genes_index_name():
+    """Test that both HVG functions return DataFrames with index name 'gene_name'."""
+    import anndata as ad
+    import pandas as pd
+
+    from vcell.pp import (
+        highly_variable_genes_seurat_v3_cols,
+        highly_variable_genes_seurat_v3_rows,
+    )
+
+    X = np.random.randn(100, 50)
+    adata = ad.AnnData(X=X)
+    adata.var_names = [f"GENE_{i}" for i in range(50)]
+
+    result_rows = highly_variable_genes_seurat_v3_rows(adata, n_top_genes=10)
+    assert result_rows.index.name == "gene_name"
+    assert isinstance(result_rows, pd.DataFrame)
+
+    result_cols = highly_variable_genes_seurat_v3_cols(adata, n_top_genes=10)
+    assert result_cols.index.name == "gene_name"
+    assert isinstance(result_cols, pd.DataFrame)

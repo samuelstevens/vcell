@@ -176,6 +176,7 @@ def highly_variable_genes_seurat_v3_rows(
         },
         index=adata.var_names,
     )
+    result.index.name = "gene_name"
 
     return result
 
@@ -284,5 +285,6 @@ def highly_variable_genes_seurat_v3_cols(
         },
         index=adata.var_names,
     )
+    result.index.name = "gene_name"
 
     return result
