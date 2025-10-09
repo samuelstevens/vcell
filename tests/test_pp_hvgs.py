@@ -13,10 +13,6 @@ from hypothesis import given, settings
 
 import vcell.pp
 
-# ==============================================================================
-# Basic functionality tests
-# ==============================================================================
-
 
 def test_hvg_methods_match():
     """Test that row and column streaming methods match scanpy's seurat_v3."""
@@ -76,7 +72,7 @@ def test_hvg_methods_match():
     )
 
     # Check that both methods return DataFrames with expected columns
-    expected_columns = {"means", "variances", "variances_norm", "highly_variable"}
+    expected_columns = {"means", "variances", "variances_normalized", "highly_variable"}
     assert set(result_rows.columns) == expected_columns
     assert set(result_cols.columns) == expected_columns
 
@@ -111,10 +107,10 @@ def test_hvg_methods_match():
     )
 
     # Check that normalized variances are computed
-    assert not np.all(result_rows["variances_norm"].values == 0), (
+    assert not np.all(result_rows["variances_normalized"].values == 0), (
         "Row normalized variances shouldn't all be zero"
     )
-    assert not np.all(result_cols["variances_norm"].values == 0), (
+    assert not np.all(result_cols["variances_normalized"].values == 0), (
         "Col normalized variances shouldn't all be zero"
     )
 
@@ -138,11 +134,6 @@ def test_hvg_methods_match():
         result_cols["highly_variable"].values,
         err_msg="Row and column streaming methods should produce identical results",
     )
-
-
-# ==============================================================================
-# Edge case tests
-# ==============================================================================
 
 
 def test_single_cell():
@@ -182,10 +173,10 @@ def test_all_genes_identical():
 
     # Should still select 5 genes, even if arbitrarily
     assert result["highly_variable"].sum() == 5
-    # All genes should have same variance_norm (within numerical precision)
-    var_norms = result["variances_norm"].values
+    # All genes should have same variance_normalized (within numerical precision)
+    var_norms = result["variances_normalized"].values
     assert np.allclose(var_norms, var_norms[0]), (
-        "All identical genes should have same variance_norm"
+        "All identical genes should have same variance_normalized"
     )
 
 
@@ -204,8 +195,8 @@ def test_extremely_sparse_matrix():
 
     assert result["highly_variable"].sum() == 50
     # Check that we don't have NaN or Inf
-    assert not np.any(np.isnan(result["variances_norm"].values))
-    assert not np.any(np.isinf(result["variances_norm"].values))
+    assert not np.any(np.isnan(result["variances_normalized"].values))
+    assert not np.any(np.isinf(result["variances_normalized"].values))
 
 
 def test_very_large_values():
@@ -222,8 +213,8 @@ def test_very_large_values():
 
     assert result["highly_variable"].sum() == 20
     # Check that we don't have NaN or Inf
-    assert not np.any(np.isnan(result["variances_norm"].values))
-    assert not np.any(np.isinf(result["variances_norm"].values))
+    assert not np.any(np.isnan(result["variances_normalized"].values))
+    assert not np.any(np.isinf(result["variances_normalized"].values))
 
 
 def test_negative_values_warning():
@@ -259,8 +250,8 @@ def test_all_zero_variance():
     # When all genes have zero CP10K variance, the lowess fitting may still produce
     # small residuals due to numerical precision and the trend fitting process.
     # The important thing is that the selection is arbitrary but deterministic.
-    # Check that variance_norm values are small (near the trend line)
-    assert np.std(result["variances_norm"].values) < 1.0, (
+    # Check that variance_normalized values are small (near the trend line)
+    assert np.std(result["variances_normalized"].values) < 1.0, (
         "Variance norms should have low spread when all genes have zero variance"
     )
 
@@ -362,15 +353,9 @@ def test_empty_matrix_handling():
     assert result["highly_variable"].sum() == 5
 
 
-# ==============================================================================
-# Property-based tests using Hypothesis
-# ==============================================================================
-
-
-# Strategy for generating count matrices
 @st.composite
 def count_matrix(draw):
-    """Generate a random count matrix."""
+    """Hypothesis strategy for generating a random count matrix."""
     n_obs = draw(st.integers(min_value=10, max_value=50))
     n_vars = draw(st.integers(min_value=20, max_value=100))
 
@@ -582,7 +567,7 @@ def test_zero_gene_handling(n_obs, n_vars):
 )
 @settings(max_examples=10, deadline=10000)
 def test_constant_gene_handling(n_obs, n_vars, constant_value):
-    """Genes with constant expression should have lower variance_norm than variable genes."""
+    """Genes with constant expression should have lower variance_normalized than variable genes."""
     # Create matrix with some constant genes and some variable genes
     matrix = np.random.poisson(5, size=(n_obs, n_vars)).astype(np.float32)
 
@@ -617,7 +602,7 @@ def test_constant_gene_handling(n_obs, n_vars, constant_value):
 @given(adata_and_format=adata_strategy())
 @settings(max_examples=10, deadline=10000)
 def test_monotonic_selection(adata_and_format):
-    """Higher variance_norm should correlate with HVG selection."""
+    """Higher variance_normalized should correlate with HVG selection."""
     adata, format_type = adata_and_format
 
     func = (
@@ -629,17 +614,19 @@ def test_monotonic_selection(adata_and_format):
     n_top = min(20, adata.n_vars // 2)
     result = func(adata, n_top_genes=n_top)
 
-    # Get variance_norm for selected and non-selected genes
-    selected_var_norm = result.loc[result["highly_variable"], "variances_norm"].values
-    not_selected_var_norm = result.loc[
-        ~result["highly_variable"], "variances_norm"
+    # Get variance_normalized for selected and non-selected genes
+    selected_var_normalized = result.loc[
+        result["highly_variable"], "variances_normalizedalized"
+    ].values
+    not_selected_var_normalized = result.loc[
+        ~result["highly_variable"], "variances_normalized"
     ].values
 
-    if len(selected_var_norm) > 0 and len(not_selected_var_norm) > 0:
+    if len(selected_var_normalized) > 0 and len(not_selected_var_normalized) > 0:
         # Minimum of selected should be >= maximum of non-selected (approximately)
         # Allow small tolerance for numerical precision
-        min_selected = np.min(selected_var_norm)
-        max_not_selected = np.max(not_selected_var_norm)
+        min_selected = np.min(selected_var_normalized)
+        max_not_selected = np.max(not_selected_var_normalized)
 
         assert min_selected >= max_not_selected - 1e-6, (
             f"Selection not monotonic: min selected {min_selected} < max not selected {max_not_selected}"
@@ -682,8 +669,3 @@ def test_sparse_dense_equivalence(matrix, n_top):
         rtol=1e-10,
         err_msg="Dense and sparse matrices have different means",
     )
-
-
-if __name__ == "__main__":
-    test_hvg_methods_match()
-    print("All tests passed!")
