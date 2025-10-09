@@ -4,11 +4,48 @@ This guide explains how to create and run experiments on Google Cloud TPU VMs us
 
 ## Prerequisites
 
-**GCS Bucket Setup**: Create a Google Cloud Storage bucket and upload your dataset
+**GCS Bucket Setup**: Create a Google Cloud Storage bucket and upload your dataset. Pick a bucket name.
+
 ```sh
-gcloud storage buckets create gs://sam-vcc-us-central1 --location us-central1
-gcloud storage cp -r $FILES gs://sam-vcc-us-central1
+gcloud storage buckets create gs://$BUCKET_NAME --location us-central1
 ```
+
+> [!TIP]
+> Sam calls his bucket `sam-vcc-us-central1` because it's sam's bucket for the virtual cell challenge and it's in us-central1.
+
+Then copy some data to the bucket.
+
+```sh
+gcloud storage cp -r $FILES gs://$BUCKET_NAME
+```
+
+> [!TIP]
+> Sam ran `gcloud storage rsync -r ./bucket gs://sam-vcc-us-central1/bucket`.
+>
+> ```
+> [I] samstevens@localhoster /V/s/d/vcc> pwd
+> /Volumes/samuel-stevens-2TB/datasets/vcc
+> [I] samstevens@localhoster /V/s/d/vcc> tree
+> .
+> └── bucket
+>     ├── NadigOConner2024_hepg2.csv
+>     ├── NadigOConner2024_hepg2.h5ad
+>     ├── NadigOConner2024_jurkat.csv
+>     ├── NadigOConner2024_jurkat.h5ad
+>     ├── ReplogleWeissman2022_K562_essential.csv
+>     ├── ReplogleWeissman2022_K562_essential.h5ad
+>     ├── ReplogleWeissman2022_K562_gwps.csv
+>     ├── ReplogleWeissman2022_K562_gwps.h5ad
+>     ├── ReplogleWeissman2022_rpe1.h5ad
+>     ├── adata_Training.csv
+>     ├── adata_Training.h5ad
+>     └── pert_counts_Validation.csv
+> 
+> 2 directories, 12 files
+> [I] samstevens@localhoster /V/s/d/vcc> gcloud storage rsync -r ./bucket gs://sam-vcc-us-central1/bucket
+> ```
+>
+> This synced all files from `bucket` to GCS.
 
 ## Variable Reference
 
@@ -99,29 +136,31 @@ uv run experiments/14_repro_st_rn.py --cfg configs/14-repro-st-rn.toml --vcc-roo
 ## Troubleshooting
 
 ### TPU creation fails
+
 - Check your TRC allocation email for correct `--zone` and `--accelerator-type`
 - Retry the command (TPU quota can be temporarily unavailable)
 - Note: You can only have 2 TPU VMs at a time with TRC; delete old ones first
 
 ### Data download fails
-- Verify IAM permissions are set correctly
-- Check bucket path is correct: `gsutil ls gs://your-bucket-name/`
+
+- Check bucket path is correct: `gcloud storage ls gs://your-bucket-name/`
 - SSH into VM and check `/tmp/startup.log`
 
 ### Experiment doesn't start
+
 - SSH into VM: `gcloud compute tpus tpu-vm ssh $NAME --zone $ZONE`
 - Check startup logs: `cat /tmp/startup.log`
 - Verify experiment script path is correct relative to repo root
 - Verify commit hash exists: `git log --oneline | grep $COMMIT`
 
 ### Config file path issues
+
 - Config paths in `exp-args` must be relative to repo root
 - `$DATA_ROOT` is only expanded on the TPU VM, not locally
-- Use `--vcc-root $DATA_ROOT` to pass the data location to experiments
 
 ## Tips
 
 - **Set default project**: `gcloud config set project PROJECT_ID` to avoid `--project` flag
-- **Use spot instances**: Add `--spot` flag for lower costs (can be preempted)
+- **Use spot instances**: Add `--spot` flag (can be preempted)
 - **Delete old VMs**: `gcloud compute tpus tpu-vm delete $NAME --zone $ZONE`
 - **Check runtime versions**: `gcloud compute tpus tpu-vm versions list`
