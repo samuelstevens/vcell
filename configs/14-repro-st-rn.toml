@@ -1,0 +1,31 @@
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_essential.h5ad"
+hvgs_csv = "data/cached/scperturb/ReplogleWeissman2022_K562_essential.csv"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
+group_by = ["batch"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/ReplogleWeissman2022_K562_gwps.h5ad"
+hvgs_csv = "data/cached/scperturb/ReplogleWeissman2022_K562_gwps.csv"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
+group_by = ["batch"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_hepg2.h5ad"
+hvgs_csv = "data/cached/scperturb/NadigOConner2024_hepg2.csv"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
+group_by = ["batch"]
+
+[[datasets]]
+h5ad_fpath = "/Volumes/samuel-stevens-2TB/datasets/scperturb/13350497/NadigOConner2024_jurkat.h5ad"
+hvgs_csv = "data/cached/scperturb/NadigOConner2024_jurkat.csv"
+pert_col = "gene"
+ctrl_label = "non-targeting"
+gene_id_col = "ensembl_id"
+group_by = ["batch"]

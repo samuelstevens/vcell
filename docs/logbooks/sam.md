@@ -319,3 +319,24 @@ I think I should work on them in this order too. The key is to do the bare minim
 - Pick out HVGs from all datasets besides VCC
 - Cross-reference those with that vary a lot from control to perturbation in just the VCC data
 - We could have some highly variable with the 50 validation perturbations
+
+# 09/22/2025
+
+Well, I'm geting railed by the context switch again.
+This job is fucking hard.
+I implemented a transformer model with similar architecture to the ST model.
+Now I need to update the code to use the common HVGs from all the datasets.
+Don't worry about canonicalizing the genes.
+
+# 09/23/2025
+
+I think I wired the model up correctly.
+GPT suggested a couple experiments.
+
+1. Permute the inputs and then unpermute the model's outputs back to the original order and they should match.
+2. Train with only control perturbations. We should quickly get to 0 loss.
+3. Train with random perturbation IDs. We should not be able to meaningfully improve beyond a random prediction.
+4. Training with random genes instead of the 2K HVGs should be worse than the HVGs.
+
+I think I then need to train on VCC + Replogle + Nadig and see what we can do.
+Finally, we can train with the Nourreddine 2025 as well.
