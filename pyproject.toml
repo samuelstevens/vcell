@@ -6,12 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anndata>=0.12.0",
-    "beartype>=0.21.0",
+    "beartype>=0.22.2",
     "cell-eval>=0.5.41",
     "chex>=0.1.89",
+    "connectorx>=0.4.4",
     "equinox>=0.13.0",
     "grain>=0.2.11",
-    "jax>=0.7.0",
+    "jax>=0.7.2",
     "jaxtyping>=0.3.2",
     "marimo>=0.15.2",
     "mudata>=0.3.2",
@@ -27,6 +28,11 @@ dependencies = [
 
 [project.scripts]
 "ensembl" = "vcell.pp.ensembl:cli"
+
+[project.optional-dependencies]
+tpu = [
+    "jax[tpu]>=0.4.37 ; sys_platform == 'linux'",
+]
 
 [build-system]
 requires = ["hatchling"]
