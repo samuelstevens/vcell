@@ -27,8 +27,8 @@ trap 'log "Script interrupted" >&2; exit 130' INT TERM
 
 # Get all required metadata upfront
 log "Reading metadata configuration."
-COMMIT=$(get_metadata "git-commit")
-readonly COMMIT
+GIT_REF=$(get_metadata "git-ref")
+readonly GIT_REF
 GCS_BUCKET=$(get_metadata "gcs-bucket")
 readonly GCS_BUCKET
 EXP_SCRIPT=$(get_metadata "exp-script")
@@ -52,7 +52,7 @@ readonly CODE_ROOT=~/vcell
 log "1. Cloning repo $CODE_REPO into $CODE_ROOT..."
 git clone "$CODE_REPO" "$CODE_ROOT"
 cd $CODE_ROOT
-git checkout "$COMMIT"
+git checkout "$GIT_REF"
 log "Cloned $CODE_REPO into $CODE_ROOT successfully."
 
 # Download dataset from GCS

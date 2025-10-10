@@ -53,7 +53,7 @@ gcloud storage cp -r $FILES gs://$BUCKET_NAME
 
 | Variable | Example | Description |
 |----------|---------|-------------|
-| `git-commit` | `6976699` | Git commit hash to checkout from the vcell repo |
+| `git-ref` | `6976699`, `sam/repro` | Git commit hash, git branch, or git tag to checkout from the vcell repo |
 | `gcs-bucket` | `gs://sam-vcc-us-central1/bucket` | Full GCS path to your data bucket |
 | `exp-script` | `experiments/14_repro_st_rn.py` | Path to Python experiment script (relative to repo root) |
 | `exp-args` | `'--cfg configs/14-repro-st-rn.toml --vcc-root $DATA_ROOT'` | Arguments passed to the experiment script |
@@ -80,7 +80,7 @@ gcloud storage cp -r $FILES gs://$BUCKET_NAME
 
 1. **You run** `gcloud compute tpus tpu-vm create` with metadata
 2. **scripts/tpu-init.sh** runs automatically on VM startup:
-   - Clones the vcell repo → checks out `$git-commit`
+   - Clones the vcell repo → checks out `$git-ref`
    - Downloads data from `$gcs-bucket` → `~/data` (sets `DATA_ROOT`)
    - Installs `uv` package manager
    - Runs: `uv run --extra tpu "$exp-script" $exp-args`
@@ -151,7 +151,7 @@ uv run experiments/14_repro_st_rn.py --cfg configs/14-repro-st-rn.toml --vcc-roo
 - SSH into VM: `gcloud compute tpus tpu-vm ssh $NAME --zone $ZONE`
 - Check startup logs: `cat /tmp/startup.log`
 - Verify experiment script path is correct relative to repo root
-- Verify commit hash exists: `git log --oneline | grep $COMMIT`
+- Verify reference exists: If it's a commit, you can do: `git log --oneline | grep $COMMIT`
 
 ### Config file path issues
 
