@@ -260,8 +260,8 @@ def loss_and_aux(
     return mu_mse, aux
 
 
-@jaxtyped(typechecker=beartype.beartype)
 @eqx.filter_jit(donate="all")
+@jaxtyped(typechecker=beartype.beartype)
 def step_model(
     model: eqx.Module,
     optim: optax.GradientTransformation,
