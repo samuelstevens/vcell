@@ -9,16 +9,7 @@ To install, clone this repository (via SSH is probably easier, but you do you).
 In the project root directory, run `uv run experiments/00_mean_baseline.py`.
 The first invocation should create a virtual environment.
 
-## Getting Started
 
-1. (If you have a Google Cloud project and approved TPU usage) Install `gcloud`. The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty. [Here's what I did](src/vcell/install-gcloud.md).
-2. [Make a TPU VM](src/vcell/make-a-tpu-vm.md).
-3. Clone this repo onto your TPU VM.
-4. [Sync the input data to the TPU VM](src/vcell/tpu-tricks.md).
-5. Run training.
-6. [Sync the outputs to your local machine](src/vcell/tpu-tricks.md).
-7. Run `uv run scripts/submit_vcc.py --pred pred_raw.h5ad`.
-8. Submit `pred_raw.prep.vcc` to the leaderboard.
 
 ## Setup
 
@@ -78,3 +69,75 @@ By adding docstrings and types to everything (good practice anyways!) you can ge
 While the docs can be a little corny, it adds very fast runtime type checking to your functions, meaning you never need to write any code that checks for types.
 It is a runtime alternative to MyPy for when you have some objects typed `any` that you still want to type-check.
 Please decorate every function with it.
+
+## Getting Started
+
+1. Install `gcloud`.
+2. Download VCC and scPerturb datasets.
+3. Upload data to GCS ($$).
+4. Start an experiment on a TPU VM.
+5. Download the predictions from GCS ($$).
+6. Prepare the predictions for submission.
+7. Submit to the leaderboard.
+
+**Install `gcloud`** (if you have a Google Cloud project and approved TPU usage).
+The [official instructions](https://cloud.google.com/sdk/docs/install) are shitty.
+[Here's what I did](src/vcell/install-gcloud.md).
+
+**Download VCC and scPerturb datasets.**
+You need to download the VCC data from the official challenge website.
+Then use the download_scperturb.py script to download scPerturb data.
+
+First do a dry-run:
+
+```
+[I] samstevens@localhoster ~/D/vcell (main)> uv run scripts/download_scperturb.py --out data/inputs/scperturb --records 13350497 --include Replogle Nadig --dry-run
+Found 54 files across 1 record(s): 13350497
+Selected 5 to download.
+
+  - 13350497/NadigOConner2024_hepg2.h5ad  (811.2 MB)
+  - 13350497/NadigOConner2024_jurkat.h5ad  (1233.7 MB)
+  - 13350497/ReplogleWeissman2022_K562_essential.h5ad  (1475.1 MB)
+  - 13350497/ReplogleWeissman2022_K562_gwps.h5ad  (8397.5 MB)
+  - 13350497/ReplogleWeissman2022_rpe1.h5ad  (1179.6 MB)
+```
+
+Then run without `--dry-run` to actually download it: `uv run scripts/download_scperturb.py --out data/inputs/scperturb --records 13350497 --include Replogle Nadig`.
+
+
+**Upload the data to GCS ($$).**
+
+Follow the instructions [here](src/vcell/tpu-init.md#prerequisites).
+Note that both uploading costs money (ingress fees) and storage costs money (storage fees).
+Both are pretty cheap (on the order of tens of cents).
+
+**Start an experiment on a TPU VM.**
+
+```sh
+gcloud compute tpus tpu-vm create TPUNAME1 \
+  --zone us-central1-a \
+  --accelerator-type v5litepod-16 \
+  --version v2-alpha-tpuv5-lite \
+  --spot \
+  --metadata git-ref=main,gcs-bucket=gs://sam-vcc-us-central1/bucket,exp-script=experiments/14_repro_st_rn.py,exp-args='--cfg configs/14-repro-st-rn.toml --vcc-root $DATA_ROOT',wandb-api-key=11b55b27cf1dab08762cd33c62e329ed291aa5ae,wandb-project=vcell,wandb-entity=samuelstevens \
+  --metadata-from-file startup-script=scripts/tpu-init.sh`
+```
+
+**Download the predictions from GCS ($$).**
+
+TODO: Experiment scripts don't upload the predictions to GCS. They should. Once they do, then you can download it from GCS to your laptop. There will be egress fees (fees for moving data from a Google Cloud zone to outside that zone).
+
+**Prepare the predictions for submission.**
+
+If you downloaded a `pred_RUNID.h5ad` file from GCS, then run:
+
+```sh
+uv run scripts/submit_vcc.py --pred pred_RUNID.h5ad
+```
+
+This will produce a `pred_RUNID.prep.vcc` file.
+
+**Submit to the leaderboard.**
+
+Submit `pred_RUNID.prep.vcc` to the leaderboard.
+
