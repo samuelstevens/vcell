@@ -64,9 +64,9 @@ class Config:
     optim: vcell.nn.optim.Config = vcell.nn.optim.Config()
     """Optimizer settings."""
 
-    batch_size: int = 32
+    batch_size: int = 256
     """Batch size."""
-    n_train: int = 10_000
+    n_train: int = 1_000_000
 
     # For Replogle-Nadig, these are the default hparams
     n_layers: int = 4
@@ -537,6 +537,8 @@ def main(
 
         # Merge non-default overrides into loaded config
         cfg = helpers.merge_configs(loaded_cfg, non_default_overrides)
+
+    jax.distributed.initialize()
 
     pprint.pprint(dataclasses.asdict(cfg))
 
