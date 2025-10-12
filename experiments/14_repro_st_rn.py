@@ -424,7 +424,7 @@ class LoadAndLift(grain.transforms.Map):
 
     def get_stuff_for_loading(self, cfg: DatasetConfig) -> StuffForLoading:
         if cfg not in self._stuff_for_loading:
-            fpath = str(cfg.h5ad_fpath)
+            fpath = os.path.expandvars(str(cfg.h5ad_fpath))
 
             # anndata
             adata = ad.read_h5ad(fpath, backed="r")
