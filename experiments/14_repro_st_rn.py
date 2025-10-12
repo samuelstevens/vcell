@@ -303,7 +303,7 @@ class MultiGroupSource(grain.sources.RandomAccessDataSource):
         self._pert2id: dict[str, int] = {}
 
         for i, cfg in enumerate(cfgs):
-            adata = ad.read_h5ad(cfg.h5ad_fpath, backed="r")
+            adata = ad.read_h5ad(os.path.expandvars(str(cfg.h5ad_fpath)), backed="r")
 
             obs = adata.obs
 
@@ -401,7 +401,7 @@ class StuffForLoading(tp.NamedTuple):
 @beartype.beartype
 class LoadAndLift(grain.transforms.Map):
     def __init__(self, vcc_h5ad: str | pathlib.Path, hvgs: list[str]):
-        self._vcc_h5ad = str(vcc_h5ad)
+        self._vcc_h5ad = os.path.expandvars(str(vcc_h5ad))
         self._hvgs = hvgs
         self._stuff_for_loading: dict[DatasetConfig, StuffForLoading] = {}
 
