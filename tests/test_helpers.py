@@ -683,3 +683,184 @@ def test_config_migration_scenario():
     assert final.value == 100  # preserved
     assert final.new_required_field == "updated"  # overridden
     assert final.new_optional_field == "set"  # overridden
+
+
+# ============================================================================
+# expandpaths tests
+# ============================================================================
+
+
+def test_expandpaths_tilde_expansion():
+    """Test expansion of ~ to user home directory."""
+    import os
+
+    @dataclasses.dataclass
+    class Config:
+        path: pathlib.Path = field(metadata={"expandpath": True})
+
+    config = Config(path=pathlib.Path("~/data"))
+    helpers.expandpaths(config)
+
+    expected = pathlib.Path(os.path.expanduser("~")) / "data"
+    assert config.path == expected
+    assert config.path.is_absolute()
+
+
+def test_expandpaths_env_var_expansion():
+    """Test expansion of environment variables."""
+    import os
+
+    @dataclasses.dataclass
+    class Config:
+        path: pathlib.Path = field(metadata={"expandpath": True})
+
+    # Use HOME which should exist on all systems
+    config = Config(path=pathlib.Path("$HOME/data"))
+    helpers.expandpaths(config)
+
+    expected = pathlib.Path(os.environ["HOME"]) / "data"
+    assert config.path == expected
+
+
+def test_expandpaths_combined_tilde_and_env():
+    """Test expansion with both ~ and environment variables."""
+    import os
+
+    @dataclasses.dataclass
+    class Config:
+        path: pathlib.Path = field(metadata={"expandpath": True})
+
+    # Tilde should be expanded first, then env vars
+    config = Config(path=pathlib.Path("~/projects/$USER"))
+    helpers.expandpaths(config)
+
+    user = os.environ.get("USER", os.environ.get("USERNAME", "user"))
+    expected = pathlib.Path(os.path.expanduser("~")) / "projects" / user
+    assert config.path == expected
+
+
+def test_expandpaths_no_metadata():
+    """Test that fields without expandpath metadata are not modified."""
+
+    @dataclasses.dataclass
+    class Config:
+        path_with_expand: pathlib.Path = field(metadata={"expandpath": True})
+        path_without_expand: pathlib.Path = field(default=pathlib.Path("~/data"))
+
+    config = Config(
+        path_with_expand=pathlib.Path("~/expanded"),
+        path_without_expand=pathlib.Path("~/notexpanded"),
+    )
+    helpers.expandpaths(config)
+
+    # path_with_expand should be expanded
+    assert config.path_with_expand != pathlib.Path("~/expanded")
+    assert config.path_with_expand.is_absolute()
+
+    # path_without_expand should remain unchanged
+    assert config.path_without_expand == pathlib.Path("~/notexpanded")
+
+
+def test_expandpaths_none_value():
+    """Test that None values are handled gracefully."""
+
+    @dataclasses.dataclass
+    class Config:
+        path: Optional[pathlib.Path] = field(metadata={"expandpath": True})
+
+    config = Config(path=None)
+    helpers.expandpaths(config)
+
+    # Should remain None without error
+    assert config.path is None
+
+
+def test_expandpaths_frozen_dataclass():
+    """Test expansion works on frozen dataclasses using object.__setattr__."""
+    import os
+
+    @dataclasses.dataclass(frozen=True)
+    class FrozenConfig:
+        path: pathlib.Path = field(metadata={"expandpath": True})
+
+    config = FrozenConfig(path=pathlib.Path("~/data"))
+    helpers.expandpaths(config)
+
+    expected = pathlib.Path(os.path.expanduser("~")) / "data"
+    assert config.path == expected
+
+
+def test_expandpaths_multiple_fields():
+    """Test expansion of multiple fields with mixed metadata."""
+    import os
+
+    @dataclasses.dataclass
+    class Config:
+        path1: pathlib.Path = field(metadata={"expandpath": True})
+        path2: pathlib.Path = field(metadata={"expandpath": True})
+        path3: pathlib.Path = field(default=pathlib.Path("."))
+        name: str = "config"
+
+    config = Config(
+        path1=pathlib.Path("~/data1"),
+        path2=pathlib.Path("$HOME/data2"),
+        path3=pathlib.Path("~/data3"),
+    )
+    helpers.expandpaths(config)
+
+    home = pathlib.Path(os.path.expanduser("~"))
+    assert config.path1 == home / "data1"
+    assert config.path2 == pathlib.Path(os.environ["HOME"]) / "data2"
+    assert config.path3 == pathlib.Path("~/data3")  # Not expanded
+    assert config.name == "config"  # String field unchanged
+
+
+def test_expandpaths_nested_env_vars():
+    """Test expansion with nested environment variable references."""
+    import os
+
+    @dataclasses.dataclass
+    class Config:
+        path: pathlib.Path = field(metadata={"expandpath": True})
+
+    user = os.environ.get("USER", os.environ.get("USERNAME", "user"))
+    config = Config(path=pathlib.Path("$HOME/projects/$USER/code"))
+    helpers.expandpaths(config)
+
+    expected = pathlib.Path(os.environ["HOME"]) / "projects" / user / "code"
+    assert config.path == expected
+
+
+def test_expandpaths_string_to_path_conversion():
+    """Test that string values are converted to Path during expansion."""
+    import os
+
+    @dataclasses.dataclass
+    class Config:
+        # Field annotated as Path but could receive string
+        path: pathlib.Path = field(metadata={"expandpath": True})
+
+    # Pass a string instead of Path
+    config = Config(path="~/data")
+    helpers.expandpaths(config)
+
+    expected = pathlib.Path(os.path.expanduser("~")) / "data"
+    assert isinstance(config.path, pathlib.Path)
+    assert config.path == expected
+
+
+def test_expandpaths_already_absolute_path():
+    """Test expansion of already absolute paths with env vars."""
+    import os
+
+    @dataclasses.dataclass
+    class Config:
+        path: pathlib.Path = field(metadata={"expandpath": True})
+
+    # Absolute path with env var
+    config = Config(path=pathlib.Path("$HOME/absolute/path"))
+    helpers.expandpaths(config)
+
+    expected = pathlib.Path(os.environ["HOME"]) / "absolute" / "path"
+    assert config.path == expected
+    assert config.path.is_absolute()

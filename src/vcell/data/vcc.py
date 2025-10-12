@@ -1,4 +1,3 @@
-import os.path
 import pathlib
 
 import anndata as ad
@@ -12,7 +11,6 @@ import polars as pl
 @beartype.beartype
 class VccData:
     def __init__(self, root: pathlib.Path):
-        root = pathlib.Path(os.path.expandvars(str(root)))
         self.adata = ad.read_h5ad(root / "adata_Training.h5ad", backed="r")
         self.val = pl.read_csv(root / "pert_counts_Validation.csv")
 

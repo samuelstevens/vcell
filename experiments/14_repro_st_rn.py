@@ -40,14 +40,17 @@ logger = logging.getLogger("14")
 @beartype.beartype
 @dataclasses.dataclass(frozen=True)
 class DatasetConfig:
-    h5ad_fpath: pathlib.Path
+    h5ad_fpath: pathlib.Path = dataclasses.field(metadata=dict(expandpath=True))
     """Path to h5ad file."""
-    hvgs_csv: pathlib.Path
+    hvgs_csv: pathlib.Path = dataclasses.field(metadata=dict(expandpath=True))
     """Path the hvgs.csv file."""
     pert_col: str = "target_gene"
     ctrl_label: str = "non-targeting"
     group_by: tuple[str, ...] = ("batch",)
     gene_id_col: str = "ensembl_id"
+
+    def __post_init__(self):
+        helpers.expandpaths(self)
 
 
 @beartype.beartype
@@ -56,7 +59,9 @@ class Config:
     seed: int = 42
     """Random seed."""
 
-    vcc: pathlib.Path = pathlib.Path("data/inputs/vcc")
+    vcc: pathlib.Path = dataclasses.field(
+        default=pathlib.Path("data/inputs/vcc"), metadata=dict(expandpath=True)
+    )
     """Path to vcc challenge data."""
 
     datasets: list[DatasetConfig] = dataclasses.field(default_factory=list)
@@ -80,10 +85,17 @@ class Config:
     # Logging
     log_every: int = 20
     """how often to log metrics."""
-    ckpt_dir: str = os.path.join(".", "checkpoints")
+    ckpt_dir: pathlib.Path = dataclasses.field(
+        default=pathlib.Path("./checkpoints"), metadata=dict(expandpath=True)
+    )
     """where to store temporary/intermediate outputs like the memmap."""
-    out_path: pathlib.Path = pathlib.Path("pred_raw.h5ad")
+    out_path: pathlib.Path = dataclasses.field(
+        default=pathlib.Path("pred_raw.h5ad"), metadata=dict(expandpath=True)
+    )
     """final submission-ready H5AD (run cell-eval prep afterwards)."""
+
+    def __post_init__(self):
+        helpers.expandpaths(self)
 
 
 @jaxtyped(typechecker=beartype.beartype)
@@ -303,7 +315,7 @@ class MultiGroupSource(grain.sources.RandomAccessDataSource):
         self._pert2id: dict[str, int] = {}
 
         for i, cfg in enumerate(cfgs):
-            adata = ad.read_h5ad(os.path.expandvars(str(cfg.h5ad_fpath)), backed="r")
+            adata = ad.read_h5ad(cfg.h5ad_fpath, backed="r")
 
             obs = adata.obs
 
@@ -401,7 +413,7 @@ class StuffForLoading(tp.NamedTuple):
 @beartype.beartype
 class LoadAndLift(grain.transforms.Map):
     def __init__(self, vcc_h5ad: str | pathlib.Path, hvgs: list[str]):
-        self._vcc_h5ad = os.path.expandvars(str(vcc_h5ad))
+        self._vcc_h5ad = vcc_h5ad
         self._hvgs = hvgs
         self._stuff_for_loading: dict[DatasetConfig, StuffForLoading] = {}
 
@@ -424,11 +436,9 @@ class LoadAndLift(grain.transforms.Map):
 
     def get_stuff_for_loading(self, cfg: DatasetConfig) -> StuffForLoading:
         if cfg not in self._stuff_for_loading:
-            fpath = os.path.expandvars(str(cfg.h5ad_fpath))
-
             # anndata
-            adata = ad.read_h5ad(fpath, backed="r")
-            self.logger.info("Opened %s.", fpath)
+            adata = ad.read_h5ad(cfg.h5ad_fpath, backed="r")
+            self.logger.info("Opened %s.", cfg.h5ad_fpath)
 
             gmap = self.gene_vocab.make_map(adata)
 
@@ -611,7 +621,7 @@ def main(
     )
 
     # Prepare on-disk memmap
-    mm_path = os.path.join(cfg.ckpt_dir, "pred_X.float32.mm")
+    mm_path = cfg.ckpt_dir / "pred_X.float32.mm"
     if os.path.exists(mm_path):
         os.remove(mm_path)
     X_mm = np.memmap(

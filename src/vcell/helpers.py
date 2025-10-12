@@ -264,3 +264,33 @@ def warn_if_nfs(path: str | os.PathLike):
             RuntimeWarning,
             stacklevel=2,
         )
+
+
+@beartype.beartype
+def expandpaths(dc):
+    """
+    Expand environment variables and user home directory in dataclass path fields.
+
+    For any dataclass field with `metadata={"expandpath": True}`, expands `~` and environment variables like `$HOME` in the field value, then converts to an absolute pathlib.Path. Modifies the dataclass in-place, including frozen dataclasses.
+
+    Args:
+        dc: A dataclass instance with fields that may need path expansion.
+
+    Example:
+        @dataclasses.dataclass
+        class Config:
+            data_dpath: pathlib.Path = dataclasses.field(metadata={"expandpath": True})
+
+        config = Config(data_dpath=pathlib.Path("~/data/$USER"))
+        expandpaths(config)
+        # config.data_dpath is now /home/username/data/username
+    """
+    assert dataclasses.is_dataclass(dc)
+    for f in dataclasses.fields(dc):
+        if f.metadata.get("expandpath"):
+            val = getattr(dc, f.name)
+            if val is not None:
+                expanded = pathlib.Path(
+                    os.path.expandvars(os.path.expanduser(str(val)))
+                )
+                object.__setattr__(dc, f.name, expanded)

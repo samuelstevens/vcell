@@ -340,3 +340,13 @@ GPT suggested a couple experiments.
 
 I think I then need to train on VCC + Replogle + Nadig and see what we can do.
 Finally, we can train with the Nourreddine 2025 as well.
+
+# 10/10/2025
+
+What needs to be done?
+
+- Preemption + checkpointing via GCS
+- Wandb -> GitHub issue
+- Better TPU utilization?
+- Use predictions from the model
+- How do you know if one model is better or worse?
