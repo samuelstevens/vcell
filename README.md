@@ -104,6 +104,13 @@ Selected 5 to download.
 
 Then run without `--dry-run` to actually download it: `uv run scripts/download_scperturb.py --out data/inputs/scperturb --records 13350497 --include Replogle Nadig`.
 
+> Then you need to create the HVGs (*only for experiment 14 and those that use highly variable genes*).
+> 
+> ```sh
+> uv run scripts/compute_hvgs.py solo-hvgs --h5 data/inputs/vcc/adata_Training.h5ad --dump-to data/cached/vcc/
+> ```
+> 
+> This will generate a `data/cached/vcc/adata_Training.csv` file. I moved all of them into the `bucket/` directory as well, to make it easy to write the config file for the different datasets.
 
 **Upload the data to GCS ($$).**
 
